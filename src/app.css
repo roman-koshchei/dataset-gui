@@ -1,1 +1,9 @@
 @import "tailwindcss";
+
+input {
+  @apply outline-none;
+}
+
+button {
+  @apply cursor-pointer;
+}
