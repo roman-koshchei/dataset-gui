@@ -55,7 +55,7 @@
 
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
   {#each items as item}
-    <div>
+    <div class="p-1">
       <div class="relative">
         <img
           class="w-full h-auto"
@@ -63,14 +63,16 @@
           height={720}
           src={item.imageSrc}
           alt=""
+          loading="lazy"
+          decoding="auto"
         />
 
-        {#each item.labels as label, i}
+        {#each item.labels as label}
           <div
             class={[
               "absolute border",
-              numberToTailwindBorder(i),
-              numberToTailwindBg(i),
+              numberToTailwindBorder(label.classId),
+              numberToTailwindBg(label.classId),
             ]}
             style:left={`${label.left * 100}%`}
             style:top={`${label.top * 100}%`}
