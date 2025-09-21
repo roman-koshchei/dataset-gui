@@ -6,6 +6,22 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "core:window:allow-set-title"
+    "core:window:allow-set-title",
+    "fs:allow-open",
+    "fs:allow-write-text-file",
+    "fs:allow-write",
+    "fs:allow-read-dir",
+    "fs:allow-read-file",
+    "fs:allow-read-text-file-lines",
+    "fs:allow-remove",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        {
+          "path": "**"
+        }
+      ]
+    },
+    "fs:default"
   ]
 }
