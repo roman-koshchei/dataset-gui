@@ -5,6 +5,7 @@ import {
   readTextFileLines,
 } from "@tauri-apps/plugin-fs";
 import { path } from "@tauri-apps/api";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 export type Dataset = {
   imagesDir: string;
@@ -37,8 +38,8 @@ function parseLabelFromYoloLine(line: string): DatasetLabel {
 }
 
 export type DatasetItem = {
-  imageName: string;
-  labelName: string;
+  name: string;
+  imageSrc: string;
   labels: DatasetLabel[];
 };
 
@@ -57,6 +58,7 @@ export async function loadWholeDataset(
 
   const itemsPromises = imageFiles.map(
     async (imageFileEntry): Promise<DatasetItem> => {
+      const name = removeExtension(imageFileEntry.name);
       const labelName = `${removeExtension(imageFileEntry.name)}.txt`;
       const labelPath = await path.join(dataset.labelsDir, labelName);
       const labels = [];
@@ -66,26 +68,30 @@ export async function loadWholeDataset(
           labels.push(parseLabelFromYoloLine(line));
         }
       }
-      return { imageName: imageFileEntry.name, labelName: labelName, labels };
+      return {
+        name,
+        imageSrc: convertFileSrc(
+          await path.join(dataset.imagesDir, imageFileEntry.name)
+        ),
+        labels,
+      };
     }
   );
 
   return await Promise.all(itemsPromises);
 }
 
-export async function saveLabelsToFile(
-  labelsDir: string,
-  labelName: string,
-  labels: DatasetLabel[]
-) {
+export async function resaveLabelsToFile(dataset: Dataset, item: DatasetItem) {
   let contents = "";
-  for (const label of labels) {
+  for (const label of item.labels) {
     const xCenter = label.left + label.width / 2;
     const yCenter = label.top + label.height / 2;
     contents += `0 ${xCenter} ${yCenter} ${label.width} ${label.height}\n`;
   }
 
-  await writeTextFile(await path.join(labelsDir, labelName), contents, {
-    append: false,
-  });
+  await writeTextFile(
+    await path.join(dataset.labelsDir, `${item.name}.txt`),
+    contents,
+    { append: false }
+  );
 }
