@@ -8,9 +8,10 @@
     let labelsDir = $state('');
 
     const colors = [
-        'bg-red-200', 'bg-blue-200', 'bg-green-200', 'bg-yellow-200',
-        'bg-purple-200', 'bg-pink-200', 'bg-indigo-200', 'bg-teal-200',
-        'bg-orange-200', 'bg-gray-200'
+        'bg-red-600', 'bg-blue-600', 'bg-green-600', 'bg-yellow-600',
+        'bg-purple-600', 'bg-pink-600', 'bg-indigo-600', 'bg-teal-600',
+        'bg-orange-600', 'bg-emerald-600', 'bg-cyan-600', 'bg-violet-600',
+        'bg-rose-600', 'bg-amber-600', 'bg-lime-600', 'bg-sky-600'
     ];
 
     function addNewTab() {
@@ -53,15 +54,15 @@
 </script>
 
 <div class="grid grid-rows-[auto_1fr] h-screen w-screen">
-    <div class="border-b border-gray-300 bg-white overflow-x-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+    <div class="border-b border-gray-700 bg-dark overflow-x-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800">
         <div class="flex items-center">
             {#each tabs as tab, index}
                 <div
-                        class="flex-shrink-0 group relative border-r border-gray-200 transition-colors duration-150 {
-            activeTab === index
-              ? 'bg-blue-50 border-b-2 border-b-blue-500 text-blue-700'
-              : 'hover:bg-gray-50 text-gray-700'
-          }"
+                        class="flex-shrink-0 relative border-r border-gray-800 transition-colors duration-150
+                {activeTab === index
+                  ? 'bg-dark border-b-2 border-b-blue-500 text-blue-200'
+                  : 'hover:bg-gray-800 text-gray-200'
+                }"
                 >
                     <div class="flex items-center">
                         <button
@@ -71,7 +72,7 @@
                             <span class="whitespace-nowrap">{tab.title}</span>
                         </button>
                         <button
-                                class="hover:bg-red-100 rounded p-1 mr-1 transition-opacity duration-150"
+                                class="hover:bg-red-900 rounded p-1 mr-1 transition-opacity duration-150"
                                 onclick={(event) => closeTab(index, event)}
                                 title="Close tab"
                         >
@@ -84,7 +85,7 @@
             {/each}
 
             <button
-                    class="flex-shrink-0 px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors duration-150"
+                    class="flex-shrink-0 px-3 py-2 text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors duration-150"
                     onclick={addNewTab}
                     title="Add new tab"
             >
@@ -95,61 +96,60 @@
         </div>
     </div>
 
+
     <div class="overflow-auto">
         {#each tabs as tab, index}
             <div
-                    class="h-full w-full {tab.color} p-6 {activeTab === index ? 'block' : 'hidden'}"
+                class="h-full w-full {tab.color} p-6 {activeTab === index ? 'block' : 'hidden'}"
             >
-                <div class="bg-white p-6 h-full border">
-                    <div class="grid grid-cols-2 gap-8 h-full">
-                        <div class="space-y-6">
-                            <h3 class="text-lg font-medium text-gray-700">Add new dataset</h3>
+                <div class="grid grid-cols-2 gap-8 h-full">
+                    <div class="space-y-6">
+                        <h3 class="text-lg font-medium text-gray-200">Add new dataset</h3>
 
-                            <div class="space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">Images directory</label>
-                                    <input
-                                            type="text"
-                                            class="w-full px-3 py-2 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                                            placeholder="Select images folder..."
-                                            bind:value={imagesDir}
-                                    />
-                                </div>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Images directory</label>
+                                <input
+                                    type="text"
+                                    class="w-full px-3 py-2 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-700 focus:border-transparent bg-gray-800 text-gray-100"
+                                    placeholder="Select images folder..."
+                                    bind:value={imagesDir}
+                                />
+                            </div>
 
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">Labels directory</label>
-                                    <input
-                                            type="text"
-                                            class="w-full px-3 py-2 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                                            placeholder="Select labels folder..."
-                                            bind:value={labelsDir}
-                                    />
-                                </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Labels directory</label>
+                                <input
+                                    type="text"
+                                    class="w-full px-3 py-2 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-700 focus:border-transparent bg-gray-800 text-gray-100"
+                                    placeholder="Select labels folder..."
+                                    bind:value={labelsDir}
+                                />
+                            </div>
 
-                                <div>
-                                    <button
-                                            class="w-full bg-blue-600 text-white py-2 px-4 hover:bg-blue-700 transition-colors"
-                                            onclick={addNewDataset}
-                                    >
-                                        Add Dataset
-                                    </button>
-                                </div>
+                            <div>
+                                <button
+                                    class="w-full bg-gray-700 text-gray-100 py-2 px-4 hover:bg-gray-800 transition-colors"
+                                    onclick={addNewDataset}
+                                >
+                                    Add Dataset
+                                </button>
                             </div>
                         </div>
+                    </div>
 
-                        <div class="space-y-6 overflow-y-auto">
-                            <h3 class="text-lg font-medium text-gray-700">Select from history</h3>
+                    <div class="space-y-6 overflow-y-auto">
+                        <h3 class="text-lg font-medium text-gray-200">Select from history</h3>
 
-                            <div class="space-y-3">
-                                {#each dataSets.filter(ds => ds.tabId === tabs[index].id) as dataSet}
-                                    <button class="w-full p-3 border border-gray-300 hover:bg-gray-50 transition-colors text-left">
-                                        <div class="text-sm">
-                                            <div class="font-medium text-gray-700">{dataSet.imagesDir}</div>
-                                            <div class="font-medium text-gray-700">{dataSet.labelsDir}</div>
-                                        </div>
-                                    </button>
-                                {/each}
-                            </div>
+                        <div class="space-y-3">
+                            {#each dataSets.filter(ds => ds.tabId === tabs[index].id) as dataSet}
+                                <button class="w-full p-3 border border-gray-700 hover:bg-gray-800 transition-colors text-left bg-gray-900">
+                                    <div class="text-sm">
+                                        <div class="font-medium text-gray-200">{dataSet.imagesDir}</div>
+                                        <div class="font-medium text-gray-400">{dataSet.labelsDir}</div>
+                                    </div>
+                                </button>
+                            {/each}
                         </div>
                     </div>
                 </div>
