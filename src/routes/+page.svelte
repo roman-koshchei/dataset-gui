@@ -7,6 +7,7 @@
   let activeTab = $state(0);
 </script>
 
+<!-- 
 <div class="flex flex-wrap">
   {#each tabs as tab}
     <button class="px-2 py-1 border border-amber-500 cursor-pointer">
@@ -19,4 +20,4 @@
     }}
     class="px-2 py-1 border border-amber-500 cursor-pointer">+</button
   >
-</div>
+</div> -->
