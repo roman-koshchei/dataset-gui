@@ -53,9 +53,11 @@
   }
 </script>
 
-<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+<div
+  class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 divide-y divide-x divide-zinc-700"
+>
   {#each items as item}
-    <div class="p-1">
+    <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
       <div class="relative">
         <img
           class="w-full h-auto"
@@ -63,8 +65,6 @@
           height={720}
           src={item.imageSrc}
           alt=""
-          loading="lazy"
-          decoding="auto"
         />
 
         {#each item.labels as label}
@@ -82,9 +82,8 @@
         {/each}
       </div>
 
-      <div class="flex flex-wrap gap-1">
+      <div class="flex flex-wrap items-end gap-1">
         <p>{item.name}</p>
-        <button>Delete</button>
       </div>
     </div>
   {/each}

@@ -31,14 +31,14 @@
     {#each tabs as tab, index}
       <div
         class={[
-          "flex-none flex items-baseline gap-3 border-r border-zinc-700 px-3",
+          "flex-none flex items-baseline border-r border-zinc-700 pr-3",
           activeTab === index
             ? "border-b-2 border-b-blue-500 text-white"
             : "hover:bg-zinc-800 text-zinc-400",
         ]}
       >
         <button
-          class="h-full cursor-pointer whitespace-nowrap"
+          class="h-full px-3 cursor-pointer whitespace-nowrap"
           onclick={() => {
             activeTab = index;
           }}
@@ -82,10 +82,9 @@
     </button>
   </div>
 
-  <div class="overflow-y-auto">
+  <div class="overflow-hidden flex">
     {#each tabs as _, index}
       <Tab active={activeTab === index} />
     {/each}
   </div>
 </main>
-

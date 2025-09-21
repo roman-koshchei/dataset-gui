@@ -1,10 +1,14 @@
 <script lang="ts">
+  import { type DatasetItem, loadWholeDataset } from "./dataset";
+  import DatasetGrid from "./DatasetGrid.svelte";
+
   let { active }: { active: boolean } = $props();
 
   let imagesDir = $state("");
   let labelsDir = $state("");
   let errorMessage = $state("");
   let isEdit = $state(true);
+  let datasetItems = $state<DatasetItem[]>([]);
 
   function selectDataset() {
     if (imagesDir == "" || labelsDir == "") {
@@ -13,10 +17,13 @@
     }
 
     isEdit = false;
+    loadWholeDataset({ imagesDir, labelsDir }).then((x) => {
+      datasetItems = x;
+    });
   }
 </script>
 
-<div class={active ? "block" : "hidden"}>
+<div class={["overflow-y-auto", active ? "order-first flex-[0_0_100%]" : ""]}>
   {#if isEdit}
     <div class="grid grid-cols-2 gap-10 h-full p-4">
       <div class="space-y-6">
@@ -78,6 +85,6 @@
       </div>
     </div>
   {:else}
-    <div></div>
+    <DatasetGrid items={datasetItems} dataset={{ imagesDir, labelsDir }} />
   {/if}
 </div>
