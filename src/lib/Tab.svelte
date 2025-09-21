@@ -1,5 +1,5 @@
 <script lang="ts">
-    let tabs = $state<{ id: number; title: string; color: string }[]>([]);
+    let tabs = $state<{ id: number; title: string }[]>([]);
     let activeTab = $state(0);
     let nextId = $state(1);
 
@@ -9,19 +9,10 @@
     let errorMessage = $state('');
     let isEdit = $state(false);
 
-    const colors = [
-        'bg-red-600', 'bg-blue-600', 'bg-green-600', 'bg-yellow-600',
-        'bg-purple-600', 'bg-pink-600', 'bg-indigo-600', 'bg-teal-600',
-        'bg-orange-600', 'bg-emerald-600', 'bg-cyan-600', 'bg-violet-600',
-        'bg-rose-600', 'bg-amber-600', 'bg-lime-600', 'bg-sky-600'
-    ];
-
     function addNewTab() {
-        const randomColor = colors[Math.floor(Math.random() * colors.length)];
         tabs.push({
             id: nextId,
-            title: `Tab ${nextId}`,
-            color: randomColor
+            title: `Tab ${nextId}`
         });
         activeTab = tabs.length - 1;
         nextId++;
@@ -115,7 +106,7 @@
         {:else}
             {#each tabs as tab, index}
                 <div
-                        class="h-full w-full {tab.color} p-6 {activeTab === index ? 'block' : 'hidden'}"
+                        class="h-full w-full p-6 {activeTab === index ? 'block' : 'hidden'}"
                 >
                     <label class="inline-flex items-center cursor-pointer">
                         <input type="checkbox" bind:checked={isEdit} class="sr-only peer" />
