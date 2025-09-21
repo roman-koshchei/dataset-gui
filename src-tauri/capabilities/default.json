@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "core:window:allow-set-title",
     "fs:allow-open",
     "fs:allow-write-text-file",
     "fs:allow-write",
