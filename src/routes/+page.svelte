@@ -1,5 +1,6 @@
 <script lang="ts">
   import Tab from "../lib/Tab.svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
 
   let tabs = $state<{ id: string; title: string | null }[]>([]);
   let activeTab = $state(0);
@@ -12,10 +13,17 @@
   function addNewTab() {
     tabs.push({
       id: crypto.randomUUID(),
-      title: null,
+      title: `Tab ${tabs.length}`,
     });
     activeTab = tabs.length - 1;
   }
+
+  $effect(() => {
+    const tab = activeTab;
+    getCurrentWindow()
+      .setTitle(`Tab ${tab}`)
+      .catch((err) => alert(err));
+  });
 </script>
 
 <main class="grid grid-rows-[auto_1fr] h-screen w-screen overflow-hidden">
@@ -35,7 +43,7 @@
             activeTab = index;
           }}
         >
-          {tab.title ?? `Tab ${index}`}
+          {tab.title}
         </button>
         <button
           class=" border border-transparent hover:border-red-500 cursor-pointer transition-colors"
