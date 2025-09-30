@@ -14,11 +14,11 @@
 
     $effect(() => {
         if (!dialog) return;
-        if (item) {
-            dialog.showModal();
+        if (!item) {
+            dialog.close();
             return;
         }
-        dialog.close();
+        dialog.showModal();
     });
 
     function handleClose() {
