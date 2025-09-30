@@ -2,7 +2,9 @@
   import Tab from "../lib/Tab.svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
 
-  let tabs = $state<{ id: string; title: string | null }[]>([]);
+  let tabs = $state<{ id: string; title: string | null }[]>([
+    { id: crypto.randomUUID(), title: "Tab 0" },
+  ]);
   let activeTab = $state(0);
 
   function closeTab(index: number) {
@@ -27,11 +29,11 @@
 </script>
 
 <main class="grid grid-rows-[auto_1fr] h-screen w-screen overflow-hidden">
-  <div class="border-y border-zinc-700 overflow-x-auto flex items-stretch h-10">
+  <div class="border-y border-zinc-700 overflow-x-auto flex items-stretch h-9">
     {#each tabs as tab, index}
       <div
         class={[
-          "flex-none flex items-baseline border-r border-zinc-700 pr-3",
+          "flex-none flex items-baseline border-r border-zinc-700 pr-3 text-sm",
           activeTab === index
             ? "border-b-2 border-b-blue-500 text-white"
             : "hover:bg-zinc-800 text-zinc-400",

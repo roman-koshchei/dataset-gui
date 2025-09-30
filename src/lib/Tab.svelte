@@ -85,6 +85,6 @@
       </div>
     </div>
   {:else}
-    <DatasetGrid items={datasetItems} dataset={{ imagesDir, labelsDir }} />
+    <DatasetGrid bind:items={datasetItems} dataset={{ imagesDir, labelsDir }} />
   {/if}
 </div>

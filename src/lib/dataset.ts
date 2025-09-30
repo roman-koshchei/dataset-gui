@@ -3,6 +3,7 @@ import {
   writeTextFile,
   exists,
   readTextFileLines,
+  remove,
 } from "@tauri-apps/plugin-fs";
 import { path } from "@tauri-apps/api";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -49,6 +50,12 @@ function removeExtension(filename: string) {
   return filename.slice(0, lastDotIndex);
 }
 
+function getExtension(filename: string): string {
+  const lastDotIndex = filename.lastIndexOf(".");
+  if (lastDotIndex === -1) return "";
+  return filename.slice(lastDotIndex + 1);
+}
+
 export async function loadWholeDataset(
   dataset: Dataset
 ): Promise<DatasetItem[]> {
@@ -59,7 +66,7 @@ export async function loadWholeDataset(
   const itemsPromises = imageFiles.map(
     async (imageFileEntry): Promise<DatasetItem> => {
       const name = removeExtension(imageFileEntry.name);
-      const labelName = `${removeExtension(imageFileEntry.name)}.txt`;
+      const labelName = `${name}.txt`;
       const labelPath = await path.join(dataset.labelsDir, labelName);
       const labels = [];
       if (await exists(labelPath)) {
@@ -94,4 +101,28 @@ export async function resaveLabelsToFile(dataset: Dataset, item: DatasetItem) {
     contents,
     { append: false }
   );
+}
+
+export async function itemImagePath(
+  dataset: Dataset,
+  item: DatasetItem
+): Promise<string> {
+  return path.join(
+    dataset.imagesDir,
+    `${item.name}.${getExtension(item.imageSrc)}`
+  );
+}
+
+export async function itemLabelPath(
+  dataset: Dataset,
+  item: DatasetItem
+): Promise<string> {
+  return path.join(dataset.labelsDir, `${item.name}.txt`);
+}
+
+export async function deleteItem(dataset: Dataset, item: DatasetItem) {
+  await Promise.all([
+    itemImagePath(dataset, item).then(remove),
+    itemLabelPath(dataset, item).then(remove),
+  ]);
 }

@@ -1,6 +1,16 @@
 <script lang="ts">
-  import type { Dataset, DatasetItem } from "./dataset";
-  let { dataset, items }: { dataset: Dataset; items: DatasetItem[] } = $props();
+  import {
+    deleteItem,
+    itemImagePath,
+    itemLabelPath,
+    type Dataset,
+    type DatasetItem,
+  } from "./dataset";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  let {
+    dataset,
+    items = $bindable(),
+  }: { dataset: Dataset; items: DatasetItem[] } = $props();
 
   function numberToTailwindBorder(n: number) {
     const borderClasses = [
@@ -51,12 +61,18 @@
     const index = Math.abs(n) % bgClasses.length;
     return bgClasses[index];
   }
+
+  async function handleDelete(index: number) {
+    const item = items[index];
+    await deleteItem(dataset, item);
+    items = items.filter((_, i) => i !== index);
+  }
 </script>
 
 <div
   class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 divide-y divide-x divide-zinc-700"
 >
-  {#each items as item}
+  {#each items as item, index (item.name)}
     <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
       <div class="relative">
         <img
@@ -65,6 +81,7 @@
           height={720}
           src={item.imageSrc}
           alt=""
+          loading="lazy"
         />
 
         {#each item.labels as label}
@@ -82,8 +99,26 @@
         {/each}
       </div>
 
-      <div class="flex flex-wrap items-end gap-1">
+      <div class="flex flex-wrap items-end gap-2">
         <p>{item.name}</p>
+        <button
+          onclick={() => {
+            handleDelete(index);
+          }}
+          class="bg-red-700 px-1"
+        >
+          Delete
+        </button>
+        <button
+          onclick={async () => {
+            await revealItemInDir(
+              await Promise.all([
+                itemImagePath(dataset, item),
+                itemLabelPath(dataset, item),
+              ])
+            );
+          }}>Reveal files</button
+        >
       </div>
     </div>
   {/each}
