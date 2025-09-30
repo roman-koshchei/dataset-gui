@@ -36,15 +36,7 @@
 >
   {#each items as item, index (item.name)}
     <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
-        <div class="relative cursor-pointer"
-             role="button"
-             tabindex="0"
-             onclick={() => openEditDialog(item)}
-             onkeydown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                      openEditDialog(item);
-                  }
-              }}>
+        <button class="relative" onclick={() => openEditDialog(item)}>
             <img
                     class="w-full h-auto"
                     width={1280}
@@ -65,7 +57,7 @@
                      style:width={`${label.width * 100}%`}
                      style:height={`${label.height * 100}%`}></div>
             {/each}
-        </div>
+        </button>
 
       <div class="flex flex-wrap items-end gap-2">
         <p>{item.name}</p>

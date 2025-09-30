@@ -54,7 +54,7 @@
 
             <div class="bg-zinc-900 p-5">
                 <button
-                        class="py-2 px-3 bg-zinc-200 text-black cursor-pointer"
+                        class="py-2 px-3 bg-zinc-200 text-black"
                         onclick={handleClose}
                 >
                     Close
