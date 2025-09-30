@@ -65,7 +65,7 @@
   async function handleDelete(index: number) {
     const item = items[index];
     await deleteItem(dataset, item);
-    items = items.filter((_, i) => i !== index);
+    items.splice(index, 1);
   }
 </script>
 
@@ -117,8 +117,10 @@
                 itemLabelPath(dataset, item),
               ])
             );
-          }}>Reveal files</button
+          }}
         >
+          Reveal files
+        </button>
       </div>
     </div>
   {/each}

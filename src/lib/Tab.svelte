@@ -1,6 +1,7 @@
 <script lang="ts">
   import { type DatasetItem, loadWholeDataset } from "./dataset";
   import DatasetGrid from "./DatasetGrid.svelte";
+  import { pushToHistory } from "./store";
 
   let { active }: { active: boolean } = $props();
 
@@ -10,16 +11,19 @@
   let isEdit = $state(true);
   let datasetItems = $state<DatasetItem[]>([]);
 
-  function selectDataset() {
+  async function selectDataset() {
     if (imagesDir == "" || labelsDir == "") {
       errorMessage = "Images and labels directories must be specified";
       return;
     }
 
     isEdit = false;
-    loadWholeDataset({ imagesDir, labelsDir }).then((x) => {
-      datasetItems = x;
-    });
+    await Promise.all([
+      loadWholeDataset({ imagesDir, labelsDir }).then((x) => {
+        datasetItems = x;
+      }),
+      pushToHistory(imagesDir, labelsDir),
+    ]);
   }
 </script>
 
