@@ -7,8 +7,8 @@
     type DatasetItem,
   } from "./dataset";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import EditDialog from "$lib/EditDialog.svelte";
-  import ItemWithLabels from "$lib/ItemWithLabels.svelte";
+  import EditDialog from "./EditDialog.svelte";
+  import { numberToTailwindBorder, numberToTailwindBg } from "./helper";
   let {
     dataset,
     items = $bindable(),
@@ -36,19 +36,36 @@
 >
   {#each items as item, index (item.name)}
     <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
-      <ItemWithLabels
-              {item}
-              class="cursor-pointer"
-              labelClassName="border"
-              role="button"
-              tabindex="0"
-              onclick={() => openEditDialog(item)}
-              onkeydown={(e: KeyboardEvent) => {
+        <div class="relative cursor-pointer"
+             role="button"
+             tabindex="0"
+             onclick={() => openEditDialog(item)}
+             onkeydown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                       openEditDialog(item);
                   }
-              }}
-      />
+              }}>
+            <img
+                    class="w-full h-auto"
+                    width={1280}
+                    height={720}
+                    src={item.imageSrc}
+                    alt=""
+                    loading="lazy"
+            />
+
+            {#each item.labels as label}
+                <div class={[
+                    "absolute border",
+                    numberToTailwindBorder(label.classId),
+                    numberToTailwindBg(label.classId),
+                    ]}
+                     style:left={`${label.left * 100}%`}
+                     style:top={`${label.top * 100}%`}
+                     style:width={`${label.width * 100}%`}
+                     style:height={`${label.height * 100}%`}></div>
+            {/each}
+        </div>
 
       <div class="flex flex-wrap items-end gap-2">
         <p>{item.name}</p>
