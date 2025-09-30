@@ -110,11 +110,12 @@
           Delete
         </button>
         <button
+          class="bg-zinc-700 px-1"
           onclick={async () => {
             await revealItemInDir(
               await Promise.all([
-                itemImagePath(dataset, item),
                 itemLabelPath(dataset, item),
+                itemImagePath(dataset, item),
               ])
             );
           }}

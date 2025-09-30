@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type DatasetItem, loadWholeDataset } from "./dataset";
   import DatasetGrid from "./DatasetGrid.svelte";
-  import { pushToHistory } from "./store";
+  import { getHistory, pushToHistory } from "./store";
 
   let { active }: { active: boolean } = $props();
 
@@ -38,7 +38,7 @@
             Images directory
             <input
               type="text"
-              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:ring focus:ring-zinc-700"
+              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
               placeholder="Enter images folder..."
               bind:value={imagesDir}
             />
@@ -48,7 +48,7 @@
             Labels directory
             <input
               type="text"
-              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:ring focus:ring-zinc-700"
+              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
               placeholder="Enter labels folder..."
               bind:value={labelsDir}
             />
@@ -71,20 +71,21 @@
         <h2 class="text-xl">Select from history</h2>
 
         <div class="space-y-3">
-          <!-- {#each dataSets as dataSet}
-          <button
-            class="w-full p-3 border border-zinc-700 hover:bg-zinc-800 transition-colors text-left bg-zinc-900"
-          >
-            <div class="text-sm">
-              <div class="font-medium text-zinc-200">
-                {dataSet.imagesDir}
-              </div>
-              <div class="font-medium text-zinc-400">
-                {dataSet.labelsDir}
-              </div>
-            </div>
-          </button>
-        {/each} -->
+          {#await getHistory() then datasets}
+            {#each datasets as dataset}
+              <button
+                onclick={async () => {
+                  imagesDir = dataset.imagesDir;
+                  labelsDir = dataset.labelsDir;
+                  await selectDataset();
+                }}
+                class="w-full px-3 py-2 border border-zinc-700 hover:bg-zinc-800 transition-colors text-left"
+              >
+                <p>{dataset.imagesDir}</p>
+                <p>{dataset.labelsDir}</p>
+              </button>
+            {/each}
+          {/await}
         </div>
       </div>
     </div>
