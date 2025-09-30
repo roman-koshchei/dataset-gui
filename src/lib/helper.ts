@@ -1,4 +1,4 @@
-﻿export function numberToTailwindBorder(n: number) {
+export function numberToTailwindBorder(n: number) {
     const borderClasses = [
         "border-red-500",
         "border-orange-500",
