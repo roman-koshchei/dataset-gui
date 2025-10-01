@@ -36,7 +36,10 @@
 >
   {#each items as item, index (item.name)}
     <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
-      <button class="relative" onclick={() => openEditDialog(item)}>
+      <button
+        class="relative overflow-hidden"
+        onclick={() => openEditDialog(item)}
+      >
         <img
           class="w-full h-auto"
           width={1280}
@@ -89,4 +92,4 @@
   {/each}
 </div>
 
-<EditDialog item={selectedItem} onClose={closeEditDialog} />
+<EditDialog {dataset} bind:item={selectedItem} onClose={closeEditDialog} />
