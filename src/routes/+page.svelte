@@ -2,13 +2,7 @@
   import Tab from "../lib/Tab.svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
 
-  let tabs = $state<{ id: string }[]>([
-    { id: crypto.randomUUID() },
-    { id: crypto.randomUUID() },
-    { id: crypto.randomUUID() },
-    { id: crypto.randomUUID() },
-    { id: crypto.randomUUID() },
-  ]);
+  let tabs = $state<{ id: string }[]>([{ id: crypto.randomUUID() }]);
   let activeTabId = $state<string>(tabs[0].id);
 
   function closeTab(id: string) {
