@@ -89,4 +89,4 @@
   {/each}
 </div>
 
-<EditDialog bind:item={selectedItem} onClose={closeEditDialog} />
+<EditDialog item={selectedItem} onClose={closeEditDialog} />
