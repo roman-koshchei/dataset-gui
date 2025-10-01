@@ -23,11 +23,11 @@
   }
 
   function openEditDialog(item: DatasetItem) {
-      selectedItem = item;
+    selectedItem = item;
   }
 
   function closeEditDialog() {
-      selectedItem = null;
+    selectedItem = null;
   }
 </script>
 
@@ -36,28 +36,30 @@
 >
   {#each items as item, index (item.name)}
     <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
-        <button class="relative" onclick={() => openEditDialog(item)}>
-            <img
-                    class="w-full h-auto"
-                    width={1280}
-                    height={720}
-                    src={item.imageSrc}
-                    alt=""
-                    loading="lazy"
-            />
+      <button class="relative" onclick={() => openEditDialog(item)}>
+        <img
+          class="w-full h-auto"
+          width={1280}
+          height={720}
+          src={item.imageSrc}
+          alt=""
+          loading="lazy"
+        />
 
-            {#each item.labels as label}
-                <div class={[
-                    "absolute border",
-                    numberToTailwindBorder(label.classId),
-                    numberToTailwindBg(label.classId),
-                    ]}
-                     style:left={`${label.left * 100}%`}
-                     style:top={`${label.top * 100}%`}
-                     style:width={`${label.width * 100}%`}
-                     style:height={`${label.height * 100}%`}></div>
-            {/each}
-        </button>
+        {#each item.labels as label}
+          <div
+            class={[
+              "absolute border",
+              numberToTailwindBorder(label.classId),
+              numberToTailwindBg(label.classId),
+            ]}
+            style:left={`${label.left * 100}%`}
+            style:top={`${label.top * 100}%`}
+            style:width={`${label.width * 100}%`}
+            style:height={`${label.height * 100}%`}
+          ></div>
+        {/each}
+      </button>
 
       <div class="flex flex-wrap items-end gap-2">
         <p>{item.name}</p>
@@ -87,4 +89,4 @@
   {/each}
 </div>
 
-<EditDialog item={selectedItem} onClose={closeEditDialog} />
+<EditDialog bind:item={selectedItem} onClose={closeEditDialog} />
