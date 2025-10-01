@@ -29,9 +29,9 @@
 <dialog bind:this={dialog} class="fixed top-2/4 left-2/4 -translate-x-1/2 -translate-y-1/2 backdrop:bg-stone-900/75">
     {#if item}
         <div class="grid grid-cols-[1fr_20rem] w-max h-full">
-            <div class="relative">
+            <div class="relative h-[90vh]">
                 <img
-                    class="w-full h-auto"
+                    class="w-auto h-full"
                     src={item.imageSrc}
                     alt=""
                     loading="lazy"
