@@ -45,7 +45,7 @@
   class="hidden open:grid grid-cols-[1fr_20rem] h-full w-full outline-none m-auto border border-zinc-700 bg-zinc-900 backdrop:bg-zinc-900/75"
 >
   {#if item}
-    <div class="h-full w-full flex justify-center items-center">
+    <div class="h-full w-full flex justify-center items-center overflow-hidden">
       <div class="relative h-fit bg-amber-100/20 w-auto">
         <img
           class="w-full h-full max-h-[95vh] object-contain"
@@ -122,6 +122,8 @@
               }
             }
             step={0.001}
+            min={0}
+            max={1}
             disabled={!isSelectedLabelIndexValid()}
           />
         </label>
@@ -143,6 +145,8 @@
               }
             }
             step={0.001}
+            min={0}
+            max={1}
             disabled={!isSelectedLabelIndexValid()}
           />
         </label>
@@ -165,6 +169,8 @@
             }
             step={0.001}
             disabled={!isSelectedLabelIndexValid()}
+            min={0}
+            max={1}
           />
         </label>
 
@@ -185,6 +191,8 @@
               }
             }
             step={0.001}
+            min={0}
+            max={1}
             disabled={!isSelectedLabelIndexValid()}
           />
         </label>
@@ -204,11 +212,12 @@
         onclick={() => {
           item.labels.push({
             classId: 0,
-            top: 0.1,
-            left: 0.1,
-            height: 0.5,
-            width: 0.5,
+            top: 0.5,
+            left: 0.5,
+            height: 0.05,
+            width: 0.05,
           });
+          selectedLabelIndex = item.labels.length - 1;
         }}
       >
         Add label
