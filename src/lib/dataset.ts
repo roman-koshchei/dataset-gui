@@ -93,7 +93,7 @@ export async function resaveLabelsToFile(dataset: Dataset, item: DatasetItem) {
   for (const label of item.labels) {
     const xCenter = label.left + label.width / 2;
     const yCenter = label.top + label.height / 2;
-    contents += `0 ${xCenter} ${yCenter} ${label.width} ${label.height}\n`;
+    contents += `${label.classId} ${xCenter} ${yCenter} ${label.width} ${label.height}\n`;
   }
 
   await writeTextFile(

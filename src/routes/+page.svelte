@@ -1,6 +1,9 @@
 <script lang="ts">
-  import Tab from "../lib/Tab.svelte";
+  import type { Dataset } from "$lib/dataset";
+  import { history, loadHistory } from "$lib/history.svelte";
+  import Tab from "$lib/Tab.svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { onMount } from "svelte";
 
   let tabs = $state<{ id: string }[]>([{ id: crypto.randomUUID() }]);
   let activeTabId = $state<string>(tabs[0].id);

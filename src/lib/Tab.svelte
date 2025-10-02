@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type DatasetItem, loadWholeDataset } from "./dataset";
   import DatasetGrid from "./DatasetGrid.svelte";
-  import { getHistory, pushToHistory } from "./store";
+  import { history, pushToHistory, removeFromHistory } from "./history.svelte";
 
   let { active }: { active: boolean } = $props();
 
@@ -71,32 +71,46 @@
         <h2 class="text-xl">Select from history</h2>
 
         <div class="space-y-3">
-          {#await getHistory() then datasets}
-            {#each datasets as dataset}
+          {#each history.items as dataset}
+            <div
+              class="grid grid-cols-[1fr_auto] items-stretch border border-zinc-700"
+            >
+              <button
+                onclick={async () => {
+                  imagesDir = dataset.imagesDir;
+                  labelsDir = dataset.labelsDir;
+                  await selectDataset();
+                }}
+                class="px-3 py-2 hover:bg-zinc-800 text-left"
+              >
+                <p>{dataset.imagesDir}</p>
+                <p>{dataset.labelsDir}</p>
+              </button>
               <div
-                class="grid grid-cols-[1fr_auto] items-stretch px-3 border border-zinc-700"
+                class="border-l border-zinc-700 px-3 grid place-content-center"
               >
                 <button
+                  class="py-1 px-3 bg-red-600 hover:bg-red-700"
                   onclick={async () => {
-                    imagesDir = dataset.imagesDir;
-                    labelsDir = dataset.labelsDir;
-                    await selectDataset();
+                    await removeFromHistory(
+                      dataset.imagesDir,
+                      dataset.labelsDir
+                    );
+                    const index = history.items.findIndex(
+                      (x) =>
+                        x.imagesDir === dataset.imagesDir &&
+                        x.labelsDir === dataset.labelsDir
+                    );
+                    if (index >= 0) {
+                      history.items.splice(index, 1);
+                    }
                   }}
-                  class="py-2 hover:bg-zinc-800 text-left"
                 >
-                  <p>{dataset.imagesDir}</p>
-                  <p>{dataset.labelsDir}</p>
+                  Delete
                 </button>
-                <div
-                  class="border-l border-zinc-700 pl-3 grid place-content-center"
-                >
-                  <button class="py-1 px-3 bg-red-600 hover:bg-red-700">
-                    Delete
-                  </button>
-                </div>
               </div>
-            {/each}
-          {/await}
+            </div>
+          {/each}
         </div>
       </div>
     </div>

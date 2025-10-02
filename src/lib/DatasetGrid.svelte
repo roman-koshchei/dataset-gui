@@ -4,12 +4,14 @@
     itemImagePath,
     itemLabelPath,
     loadWholeDataset,
+    resaveLabelsToFile,
     type Dataset,
     type DatasetItem,
   } from "./dataset";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import EditDialog from "./EditDialog.svelte";
   import { numberToTailwindBorder, numberToTailwindBg } from "./helper";
+  import { tick } from "svelte";
   let {
     dataset,
     items = $bindable(),
@@ -17,6 +19,7 @@
 
   let selectedItem = $state<DatasetItem | null>(null);
   let reloadIsActive = $state(false);
+  let saveAllIsActive = $state(false);
 
   async function handleDelete(name: string) {
     const index = items.findIndex((x) => x.name === name);
@@ -43,6 +46,8 @@
           reloadIsActive = true;
           const newItems = await loadWholeDataset(dataset);
           items = newItems;
+        } catch (err) {
+          alert(`Error during reloading dataset: ${err}`);
         } finally {
           reloadIsActive = false;
         }
@@ -50,6 +55,23 @@
       disabled={reloadIsActive}
     >
       Reload
+    </button>
+
+    <button
+      class="px-3 border-r border-zinc-700 py-1 disabled:text-zinc-700"
+      onclick={async () => {
+        try {
+          saveAllIsActive = true;
+          await Promise.all(items.map((x) => resaveLabelsToFile(dataset, x)));
+        } catch (err) {
+          alert(`Error during saving all changes: ${err}`);
+        } finally {
+          saveAllIsActive = false;
+        }
+      }}
+      disabled={saveAllIsActive}
+    >
+      Save all changes
     </button>
 
     <!-- 
