@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type DatasetItem, loadWholeDataset } from "./dataset";
   import DatasetGrid from "./DatasetGrid.svelte";
-  import { getHistory, pushToHistory } from "./store";
+  import { history, pushToHistory, removeFromHistory } from "./history.svelte";
 
   let { active }: { active: boolean } = $props();
 
@@ -27,9 +27,9 @@
   }
 </script>
 
-<div class={["overflow-y-auto", active ? "order-first flex-[0_0_100%]" : ""]}>
+<div class={["flex-[0_0_100%]", active ? "order-first" : ""]}>
   {#if isEdit}
-    <div class="grid grid-cols-2 gap-10 h-full p-4">
+    <div class="h-full overflow-y-auto grid grid-cols-2 gap-8 p-4">
       <div class="space-y-6">
         <h2 class="text-xl">Add new dataset</h2>
 
@@ -67,25 +67,47 @@
         </form>
       </div>
 
-      <div class="space-y-6 overflow-y-auto">
+      <div class="space-y-6">
         <h2 class="text-xl">Select from history</h2>
 
         <div class="space-y-3">
-          {#await getHistory() then datasets}
-            {#each datasets as dataset}
+          {#each history.items as dataset}
+            <div
+              class="grid grid-cols-[1fr_auto] items-stretch border border-zinc-700"
+            >
               <button
                 onclick={async () => {
                   imagesDir = dataset.imagesDir;
                   labelsDir = dataset.labelsDir;
                   await selectDataset();
                 }}
-                class="w-full px-3 py-2 border border-zinc-700 hover:bg-zinc-800 transition-colors text-left"
+                class="px-3 py-2 hover:bg-zinc-800 text-left"
               >
                 <p>{dataset.imagesDir}</p>
                 <p>{dataset.labelsDir}</p>
               </button>
-            {/each}
-          {/await}
+              <div
+                class="border-l border-zinc-700 px-3 grid place-content-center"
+              >
+                <button
+                  aria-label={`Delete from history: ${dataset.labelsDir}`}
+                  class="py-1 px-3 bg-red-600 hover:bg-red-700"
+                  onclick={async () => {
+                    try {
+                      await removeFromHistory(
+                        dataset.imagesDir,
+                        dataset.labelsDir
+                      );
+                    } catch (err) {
+                      console.error("Failed to remove from history:", err);
+                    }
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          {/each}
         </div>
       </div>
     </div>

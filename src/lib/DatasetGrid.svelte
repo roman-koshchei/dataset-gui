@@ -3,6 +3,8 @@
     deleteItem,
     itemImagePath,
     itemLabelPath,
+    loadWholeDataset,
+    resaveLabelsToFile,
     type Dataset,
     type DatasetItem,
   } from "./dataset";
@@ -15,8 +17,15 @@
   }: { dataset: Dataset; items: DatasetItem[] } = $props();
 
   let selectedItem = $state<DatasetItem | null>(null);
+  let reloadIsActive = $state(false);
+  let saveAllIsActive = $state(false);
 
-  async function handleDelete(index: number) {
+  async function handleDelete(name: string) {
+    const index = items.findIndex((x) => x.name === name);
+    if (index === -1) {
+      console.error(`Item not found: ${name}`);
+      return;
+    }
     const item = items[index];
     await deleteItem(dataset, item);
     items.splice(index, 1);
@@ -31,65 +40,111 @@
   }
 </script>
 
-<div
-  class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 divide-y divide-x divide-zinc-700"
->
-  {#each items as item, index (item.name)}
-    <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
-      <button
-        class="relative overflow-hidden"
-        onclick={() => openEditDialog(item)}
-      >
-        <img
-          class="w-full h-auto"
-          width={1280}
-          height={720}
-          src={item.imageSrc}
-          alt=""
-          loading="lazy"
-        />
+<section class="h-full grid grid-rows-[auto_1fr]">
+  <div class="border-b border-zinc-700 flex items-stretch text-sm">
+    <button
+      class="px-3 border-r border-zinc-700 py-1 disabled:text-zinc-700"
+      onclick={async () => {
+        try {
+          reloadIsActive = true;
+          const newItems = await loadWholeDataset(dataset);
+          items = newItems;
+        } catch (err) {
+          alert(`Error during reloading dataset: ${err}`);
+        } finally {
+          reloadIsActive = false;
+        }
+      }}
+      disabled={reloadIsActive}
+    >
+      Reload
+    </button>
 
-        {#each item.labels as label}
-          <div
-            class={[
-              "absolute border",
-              numberToTailwindBorder(label.classId),
-              numberToTailwindBg(label.classId),
-            ]}
-            style:left={`${label.left * 100}%`}
-            style:top={`${label.top * 100}%`}
-            style:width={`${label.width * 100}%`}
-            style:height={`${label.height * 100}%`}
-          ></div>
-        {/each}
-      </button>
+    <button
+      class="px-3 border-r border-zinc-700 py-1 disabled:text-zinc-700"
+      onclick={async () => {
+        try {
+          saveAllIsActive = true;
+          await Promise.all(items.map((x) => resaveLabelsToFile(dataset, x)));
+        } catch (err) {
+          alert(`Error during saving all changes: ${err}`);
+        } finally {
+          saveAllIsActive = false;
+        }
+      }}
+      disabled={saveAllIsActive}
+    >
+      Save all changes
+    </button>
 
-      <div class="flex flex-wrap items-end gap-2">
-        <p>{item.name}</p>
+    <!-- 
+    <label class="px-3 flex items-center gap-2 border-r border-zinc-700">
+      <input type="checkbox" bind:checked={showOnlyItemsWith0Labels} />
+      Show only items with 0 labels
+    </label> 
+    -->
+  </div>
+
+  <div
+    class="overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 divide-y divide-x divide-zinc-700"
+  >
+    {#each items as item (item.name)}
+      <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
         <button
-          onclick={() => {
-            handleDelete(index);
-          }}
-          class="bg-red-700 px-1"
+          class="relative overflow-hidden"
+          onclick={() => openEditDialog(item)}
         >
-          Delete
+          <img
+            class="w-full h-auto"
+            width={1280}
+            height={720}
+            src={item.imageSrc}
+            alt=""
+            loading="lazy"
+          />
+
+          {#each item.labels as label}
+            <div
+              class={[
+                "absolute border",
+                numberToTailwindBorder(label.classId),
+                numberToTailwindBg(label.classId),
+              ]}
+              style:left={`${label.left * 100}%`}
+              style:top={`${label.top * 100}%`}
+              style:width={`${label.width * 100}%`}
+              style:height={`${label.height * 100}%`}
+            ></div>
+          {/each}
         </button>
-        <button
-          class="bg-zinc-700 px-1"
-          onclick={async () => {
-            await revealItemInDir(
-              await Promise.all([
-                itemLabelPath(dataset, item),
-                itemImagePath(dataset, item),
-              ])
-            );
-          }}
-        >
-          Reveal files
-        </button>
+
+        <div class="flex flex-wrap items-end gap-2">
+          <p>{item.name}</p>
+          <button
+            onclick={() => {
+              handleDelete(item.name);
+            }}
+            class="bg-red-700 px-1"
+          >
+            Delete
+          </button>
+          <button
+            class="bg-zinc-700 px-1"
+            onclick={async () => {
+              await revealItemInDir(
+                await Promise.all([
+                  itemLabelPath(dataset, item),
+                  itemImagePath(dataset, item),
+                ])
+              );
+            }}
+          >
+            Reveal files
+          </button>
+        </div>
       </div>
-    </div>
-  {/each}
-</div>
+    {/each}
+  </div>
+</section>
 
 <EditDialog {dataset} bind:item={selectedItem} onClose={closeEditDialog} />

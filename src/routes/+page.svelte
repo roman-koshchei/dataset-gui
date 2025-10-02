@@ -1,6 +1,9 @@
 <script lang="ts">
-  import Tab from "../lib/Tab.svelte";
+  import type { Dataset } from "$lib/dataset";
+  import { history, loadHistory } from "$lib/history.svelte";
+  import Tab from "$lib/Tab.svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { onMount } from "svelte";
 
   let tabs = $state<{ id: string }[]>([{ id: crypto.randomUUID() }]);
   let activeTabId = $state<string>(tabs[0].id);
@@ -23,13 +26,13 @@
   });
 </script>
 
-<main class="grid grid-rows-[auto_1fr] h-screen w-screen overflow-hidden">
+<main class="grid grid-rows-[auto_1fr] h-screen">
   <div
     class="border-y border-zinc-700 overflow-x-auto scrollbar flex items-stretch"
   >
     <button
       aria-label="Add new tab"
-      class="px-3 py-2 cursor-pointer hover:bg-zinc-800 transition-colors border-r border-zinc-700"
+      class="px-3 hover:bg-zinc-800 py-[0.42rem] transition-colors border-r border-zinc-700"
       onclick={() => addNewTab()}
     >
       <svg
@@ -49,14 +52,14 @@
     {#each tabs.toReversed() as tab}
       <div
         class={[
-          "flex-none flex items-baseline border-r border-zinc-700 pr-3 text-sm",
+          "flex-none flex items-baseline border-r py-1 border-zinc-700 pr-3 text-sm",
           activeTabId === tab.id
             ? "border-b-2 border-b-blue-500 text-white"
             : "hover:bg-zinc-800 text-zinc-400",
         ]}
       >
         <button
-          class="h-full px-3 cursor-pointer whitespace-nowrap"
+          class="h-full px-3 whitespace-nowrap"
           onclick={() => {
             activeTabId = tab.id;
           }}
@@ -64,7 +67,7 @@
           {tab.id}
         </button>
         <button
-          class=" border border-transparent hover:border-red-500 cursor-pointer transition-colors"
+          class=" border border-transparent hover:border-red-500 transition-colors"
           onclick={() => closeTab(tab.id)}
           aria-label="Close tab"
         >
