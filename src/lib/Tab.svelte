@@ -27,9 +27,9 @@
   }
 </script>
 
-<div class={["overflow-y-auto", active ? "order-first flex-[0_0_100%]" : ""]}>
+<div class={["flex-[0_0_100%]", active ? "order-first" : ""]}>
   {#if isEdit}
-    <div class="grid grid-cols-2 gap-10 h-full p-4">
+    <div class="h-full overflow-y-auto grid grid-cols-2 gap-8 p-4">
       <div class="space-y-6">
         <h2 class="text-xl">Add new dataset</h2>
 
@@ -67,23 +67,34 @@
         </form>
       </div>
 
-      <div class="space-y-6 overflow-y-auto">
+      <div class="space-y-6">
         <h2 class="text-xl">Select from history</h2>
 
         <div class="space-y-3">
           {#await getHistory() then datasets}
             {#each datasets as dataset}
-              <button
-                onclick={async () => {
-                  imagesDir = dataset.imagesDir;
-                  labelsDir = dataset.labelsDir;
-                  await selectDataset();
-                }}
-                class="w-full px-3 py-2 border border-zinc-700 hover:bg-zinc-800 transition-colors text-left"
+              <div
+                class="grid grid-cols-[1fr_auto] items-stretch px-3 border border-zinc-700"
               >
-                <p>{dataset.imagesDir}</p>
-                <p>{dataset.labelsDir}</p>
-              </button>
+                <button
+                  onclick={async () => {
+                    imagesDir = dataset.imagesDir;
+                    labelsDir = dataset.labelsDir;
+                    await selectDataset();
+                  }}
+                  class="py-2 hover:bg-zinc-800 text-left"
+                >
+                  <p>{dataset.imagesDir}</p>
+                  <p>{dataset.labelsDir}</p>
+                </button>
+                <div
+                  class="border-l border-zinc-700 pl-3 grid place-content-center"
+                >
+                  <button class="py-1 px-3 bg-red-600 hover:bg-red-700">
+                    Delete
+                  </button>
+                </div>
+              </div>
             {/each}
           {/await}
         </div>

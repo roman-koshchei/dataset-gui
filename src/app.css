@@ -5,5 +5,5 @@ input {
 }
 
 button {
-  @apply cursor-pointer;
+  @apply cursor-pointer transition-colors;
 }

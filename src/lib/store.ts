@@ -21,3 +21,14 @@ export async function pushToHistory(imagesDir: string, labelsDir: string) {
 export async function getHistory(): Promise<Dataset[]> {
   return (await store.get<Dataset[]>(HISTORY_KEY)) ?? [];
 }
+
+export async function removeFromHistory(imagesDir: string, labelsDir: string) {
+  const current = (await store.get<Dataset[]>(HISTORY_KEY)) ?? [];
+  await store.set(
+    HISTORY_KEY,
+    current.filter(
+      (x) => !(x.imagesDir === imagesDir && x.labelsDir === labelsDir)
+    )
+  );
+  await store.save();
+}
