@@ -96,14 +96,6 @@
                       dataset.imagesDir,
                       dataset.labelsDir
                     );
-                    const index = history.items.findIndex(
-                      (x) =>
-                        x.imagesDir === dataset.imagesDir &&
-                        x.labelsDir === dataset.labelsDir
-                    );
-                    if (index >= 0) {
-                      history.items.splice(index, 1);
-                    }
                   }}
                 >
                   Delete
