@@ -90,12 +90,17 @@
                 class="border-l border-zinc-700 px-3 grid place-content-center"
               >
                 <button
+                  aria-label={`Delete from history: ${dataset.labelsDir}`}
                   class="py-1 px-3 bg-red-600 hover:bg-red-700"
                   onclick={async () => {
-                    await removeFromHistory(
-                      dataset.imagesDir,
-                      dataset.labelsDir
-                    );
+                    try {
+                      await removeFromHistory(
+                        dataset.imagesDir,
+                        dataset.labelsDir
+                      );
+                    } catch (err) {
+                      console.error("Failed to remove from history:", err);
+                    }
                   }}
                 >
                   Delete

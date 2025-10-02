@@ -11,7 +11,6 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import EditDialog from "./EditDialog.svelte";
   import { numberToTailwindBorder, numberToTailwindBg } from "./helper";
-  import { tick } from "svelte";
   let {
     dataset,
     items = $bindable(),
@@ -23,6 +22,10 @@
 
   async function handleDelete(name: string) {
     const index = items.findIndex((x) => x.name === name);
+    if (index === -1) {
+      console.error(`Item not found: ${name}`);
+      return;
+    }
     const item = items[index];
     await deleteItem(dataset, item);
     items.splice(index, 1);
