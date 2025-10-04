@@ -10,7 +10,7 @@
   } from "./dataset";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import EditDialog from "./EditDialog.svelte";
-  import { numberToTailwindBorder, numberToTailwindBg } from "./helper";
+  import { numberToTailwindBorder, numberToTailwindBg } from "./helpers";
   let {
     dataset,
     items = $bindable(),
