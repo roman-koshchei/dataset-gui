@@ -95,11 +95,8 @@
     const currentY =
       (e.clientY - imageContainerRect.top) / imageContainerRect.height;
 
-    console.log(currentX);
-
     const deltaX = currentX - dragStartX;
     const deltaY = currentY - dragStartY;
-    console.log(deltaX);
 
     const label = item.labels[selectedLabelIndex];
 
