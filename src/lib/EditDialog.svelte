@@ -4,7 +4,8 @@
     type Dataset,
     type DatasetItem,
   } from "./dataset";
-  import { numberToTailwindBg, numberToTailwindBorder } from "./helper";
+  import { numberToTailwindBg, numberToTailwindBorder } from "./helpers";
+  import ResizeHandles from "$lib/ResizeHandles.svelte";
 
   let {
     dataset,
@@ -18,6 +19,23 @@
 
   let dialog: HTMLDialogElement;
   let selectedLabelIndex = $state(-1);
+
+  let imageContainer = $state<HTMLDivElement | undefined>(undefined);
+  let imageContainerRect = $derived(
+    imageContainer ? imageContainer.getBoundingClientRect() : null
+  );
+
+  // UI doesn't need reactive updates for those
+  let mouseAction:
+    | { type: "dragging" }
+    | {
+        type: "resizing";
+        handle: "tl" | "tr" | "bl" | "br" | "t" | "b" | "l" | "r";
+      }
+    | null = null;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragStartLabel = { left: 0, top: 0, width: 0, height: 0 };
 
   $effect(() => {
     if (!dialog) return;
@@ -38,7 +56,156 @@
     if (!item) return false;
     return selectedLabelIndex >= 0 && selectedLabelIndex < item.labels.length;
   }
+
+  function handleMouseDown(e: MouseEvent, labelIndex: number, handle?: string) {
+    selectedLabelIndex = labelIndex;
+
+    if (!imageContainerRect || !item) return;
+
+    e.stopPropagation();
+    e.preventDefault();
+
+    dragStartX =
+      (e.clientX - imageContainerRect.left) / imageContainerRect.width;
+    dragStartY =
+      (e.clientY - imageContainerRect.top) / imageContainerRect.height;
+
+    const label = item.labels[labelIndex];
+    dragStartLabel = { ...label };
+
+    if (handle) {
+      mouseAction = { type: "resizing", handle: handle as any };
+    } else {
+      mouseAction = { type: "dragging" };
+    }
+  }
+
+  function handleMouseMove(e: MouseEvent) {
+    if (
+      !imageContainerRect ||
+      !item ||
+      !mouseAction ||
+      !isSelectedLabelIndexValid()
+    ) {
+      return;
+    }
+
+    const currentX =
+      (e.clientX - imageContainerRect.left) / imageContainerRect.width;
+    const currentY =
+      (e.clientY - imageContainerRect.top) / imageContainerRect.height;
+
+    const deltaX = currentX - dragStartX;
+    const deltaY = currentY - dragStartY;
+
+    const label = item.labels[selectedLabelIndex];
+
+    if (mouseAction.type === "dragging") {
+      label.left = Math.max(
+        0,
+        Math.min(1 - dragStartLabel.width, dragStartLabel.left + deltaX)
+      );
+      label.top = Math.max(
+        0,
+        Math.min(1 - dragStartLabel.height, dragStartLabel.top + deltaY)
+      );
+    } else if (mouseAction.type === "resizing") {
+      if (mouseAction.handle === "tl") {
+        const newLeft = Math.max(
+          0,
+          Math.min(
+            dragStartLabel.left + dragStartLabel.width - 0.01,
+            dragStartLabel.left + deltaX
+          )
+        );
+        const newTop = Math.max(
+          0,
+          Math.min(
+            dragStartLabel.top + dragStartLabel.height - 0.01,
+            dragStartLabel.top + deltaY
+          )
+        );
+        label.width = dragStartLabel.left + dragStartLabel.width - newLeft;
+        label.height = dragStartLabel.top + dragStartLabel.height - newTop;
+        label.left = newLeft;
+        label.top = newTop;
+      } else if (mouseAction.handle === "tr") {
+        const newTop = Math.max(
+          0,
+          Math.min(
+            dragStartLabel.top + dragStartLabel.height - 0.01,
+            dragStartLabel.top + deltaY
+          )
+        );
+        label.width = Math.max(
+          0.01,
+          Math.min(1 - dragStartLabel.left, dragStartLabel.width + deltaX)
+        );
+        label.height = dragStartLabel.top + dragStartLabel.height - newTop;
+        label.top = newTop;
+      } else if (mouseAction.handle === "bl") {
+        const newLeft = Math.max(
+          0,
+          Math.min(
+            dragStartLabel.left + dragStartLabel.width - 0.01,
+            dragStartLabel.left + deltaX
+          )
+        );
+        label.width = dragStartLabel.left + dragStartLabel.width - newLeft;
+        label.height = Math.max(
+          0.01,
+          Math.min(1 - dragStartLabel.top, dragStartLabel.height + deltaY)
+        );
+        label.left = newLeft;
+      } else if (mouseAction.handle === "br") {
+        label.width = Math.max(
+          0.01,
+          Math.min(1 - dragStartLabel.left, dragStartLabel.width + deltaX)
+        );
+        label.height = Math.max(
+          0.01,
+          Math.min(1 - dragStartLabel.top, dragStartLabel.height + deltaY)
+        );
+      } else if (mouseAction.handle === "t") {
+        const newTop = Math.max(
+          0,
+          Math.min(
+            dragStartLabel.top + dragStartLabel.height - 0.01,
+            dragStartLabel.top + deltaY
+          )
+        );
+        label.height = dragStartLabel.top + dragStartLabel.height - newTop;
+        label.top = newTop;
+      } else if (mouseAction.handle === "b") {
+        label.height = Math.max(
+          0.01,
+          Math.min(1 - dragStartLabel.top, dragStartLabel.height + deltaY)
+        );
+      } else if (mouseAction.handle === "l") {
+        const newLeft = Math.max(
+          0,
+          Math.min(
+            dragStartLabel.left + dragStartLabel.width - 0.01,
+            dragStartLabel.left + deltaX
+          )
+        );
+        label.width = dragStartLabel.left + dragStartLabel.width - newLeft;
+        label.left = newLeft;
+      } else if (mouseAction.handle === "r") {
+        label.width = Math.max(
+          0.01,
+          Math.min(1 - dragStartLabel.left, dragStartLabel.width + deltaX)
+        );
+      }
+    }
+  }
+
+  function handleMouseUp() {
+    mouseAction = null;
+  }
 </script>
+
+<svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} />
 
 <dialog
   bind:this={dialog}
@@ -46,7 +213,10 @@
 >
   {#if item}
     <div class="h-full w-full flex justify-center items-center overflow-hidden">
-      <div class="relative h-fit bg-amber-100/20 w-auto">
+      <div
+        bind:this={imageContainer}
+        class="relative h-fit bg-amber-100/20 w-auto"
+      >
         <img
           class="w-full h-full max-h-[95vh] object-contain"
           src={item.imageSrc}
@@ -56,9 +226,6 @@
 
         {#each item.labels as label, labelIndex}
           <button
-            onclick={() => {
-              selectedLabelIndex = labelIndex;
-            }}
             aria-label={`Bounding box ${labelIndex}`}
             class={[
               "absolute",
@@ -70,7 +237,16 @@
             style:top={`${label.top * 100}%`}
             style:width={`${label.width * 100}%`}
             style:height={`${label.height * 100}%`}
-          ></button>
+            onmousedown={(e) => handleMouseDown(e, labelIndex)}
+          >
+            {#if selectedLabelIndex === labelIndex}
+              <ResizeHandles
+                classId={label.classId}
+                {labelIndex}
+                onHandleMouseDown={handleMouseDown}
+              />
+            {/if}
+          </button>
         {/each}
       </div>
     </div>
