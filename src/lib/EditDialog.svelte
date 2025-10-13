@@ -19,11 +19,14 @@
 
   let dialog: HTMLDialogElement;
   let selectedLabelIndex = $state(-1);
+  let isSaving = $state(false);
 
   let imageContainer = $state<HTMLDivElement | undefined>(undefined);
   let imageContainerRect = $derived(
     imageContainer ? imageContainer.getBoundingClientRect() : null
   );
+
+  let autosaveTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // UI doesn't need reactive updates for those
   let mouseAction:
@@ -47,9 +50,26 @@
     }
   });
 
+  $effect(() => {
+    if (item?.labels) triggerAutosave();
+  });
+
   function handleClose() {
     onClose();
     selectedLabelIndex = -1;
+  }
+
+  function triggerAutosave() {
+    if (!item) return;
+    if (autosaveTimeout) clearTimeout(autosaveTimeout);
+    autosaveTimeout = setTimeout(async () => {
+      isSaving = true;
+      try {
+        await resaveLabelsToFile(dataset, item);
+      } finally {
+        isSaving = false;
+      }
+    }, 300);
   }
 
   function isSelectedLabelIndexValid() {
@@ -201,6 +221,7 @@
   }
 
   function handleMouseUp() {
+    if (mouseAction) triggerAutosave();
     mouseAction = null;
   }
 </script>
@@ -375,12 +396,18 @@
       </div>
 
       <button
-        class="block py-2 px-3 bg-green-600 text-white hover:bg-green-700"
+        class="block py-2 px-3 bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
         onclick={async () => {
-          await resaveLabelsToFile(dataset, item);
+          isSaving = true;
+          try {
+            await resaveLabelsToFile(dataset, item);
+          } finally {
+            isSaving = false;
+          }
         }}
+        disabled={isSaving}
       >
-        Save changes
+        {isSaving ? "Saving..." : "Save changes"}
       </button>
 
       <button
