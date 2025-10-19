@@ -221,7 +221,6 @@
   }
 
   function handleMouseUp() {
-    if (mouseAction) triggerAutosave();
     mouseAction = null;
   }
 </script>
