@@ -410,6 +410,15 @@
       >
         Delete Selected label
       </button>
+
+      <button
+        class="block py-2 px-3 bg-zinc-200 hover:bg-zinc-300"
+        onclick={() => {
+          selectedLabelIndex = -1;
+        }}
+      >
+        Cancel selection
+      </button>
     </div>
   {/if}
 </dialog>
