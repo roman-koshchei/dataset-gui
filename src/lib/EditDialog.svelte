@@ -19,14 +19,13 @@
 
     let dialog: HTMLDialogElement;
     let selectedLabelIndex = $state(-1);
+    let hasUnsavedChanges = $state(false);
+    let saveStatus = $state<"saving" | "saved" | "error" | null>(null);
 
     let imageContainer = $state<HTMLDivElement | undefined>(undefined);
     let imageContainerRect = $derived(
         imageContainer ? imageContainer.getBoundingClientRect() : null,
     );
-
-    let autosaveTimeout: ReturnType<typeof setTimeout> | null = null;
-    let isSaving = $state(false);
 
     // UI doesn't need reactive updates for those
     let mouseAction:
@@ -38,6 +37,7 @@
         | null = null;
     let dragStartX = 0;
     let dragStartY = 0;
+    
     let dragStartLabel = { left: 0, top: 0, width: 0, height: 0 };
 
     $effect(() => {
@@ -50,22 +50,34 @@
         }
     });
 
+    $effect(() => {
+        const autosaveInterval = setInterval(() => {
+            if (hasUnsavedChanges && saveStatus !== "saving") {
+                performSave();
+            }
+        }, 300);
+
+        return () => clearInterval(autosaveInterval);
+    });
+
     function handleClose() {
         onClose();
         selectedLabelIndex = -1;
     }
 
-    function triggerAutosave() {
+    async function performSave() {
         if (!item) return;
-        if (autosaveTimeout) clearTimeout(autosaveTimeout);
-        autosaveTimeout = setTimeout(async () => {
-            isSaving = true;
-            try {
-                await resaveLabelsToFile(dataset, item);
-            } finally {
-                isSaving = false;
-            }
-        }, 300);
+
+        saveStatus = "saving";
+
+        try {
+            await resaveLabelsToFile(dataset, item);
+            saveStatus = "saved";
+            hasUnsavedChanges = false;
+        } catch (error) {
+            saveStatus = "error";
+            console.error("Failed to save labels:", error);
+        }
     }
 
     function isSelectedLabelIndexValid() {
@@ -250,11 +262,12 @@
                 );
             }
         }
-
-        triggerAutosave();
     }
 
     function handleMouseUp() {
+        if (mouseAction !== null) {
+            hasUnsavedChanges = true;
+        }
         mouseAction = null;
     }
 </script>
@@ -437,20 +450,22 @@
                 </label>
             </div>
 
-            <button
-                class="block py-2 px-3 bg-green-600 text-white hover:bg-green-700 disabled:bg-red-600"
-                onclick={async () => {
-                    isSaving = true;
-                    try {
-                        await resaveLabelsToFile(dataset, item);
-                    } finally {
-                        isSaving = false;
-                    }
-                }}
-                disabled={isSaving}
-            >
-                Save changes
-            </button>
+            <div class="flex items-center gap-2">
+                <button
+                    class="py-2 px-3 bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                    onclick={performSave}
+                    disabled={saveStatus === "saving"}
+                >
+                    Save changes
+                </button>
+                {#if saveStatus === "saving"}
+                    <span class="text-yellow-500">Saving...</span>
+                {:else if saveStatus === "saved"}
+                    <span class="text-green-500">Saved</span>
+                {:else if saveStatus === "error"}
+                    <span class="text-red-500">Saving failed</span>
+                {/if}
+            </div>
 
             <button
                 class="block py-2 px-3 bg-sky-600 text-white hover:bg-blue-700"
