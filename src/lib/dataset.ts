@@ -21,6 +21,10 @@ export type DatasetLabel = {
   height: number;
 };
 
+export function normArea(label: DatasetLabel): number {
+  return label.width * label.height;
+}
+
 function parseLabelFromYoloLine(line: string): DatasetLabel {
   const parts = line.split(" ");
   const classId = parseInt(parts[0], 10);
