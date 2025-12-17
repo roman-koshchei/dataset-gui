@@ -1,7 +1,8 @@
 {
   "name": "dataset-gui",
   "version": "0.1.0",
-  "description": "",
+  "description": "A GUI tool for viewing and editing object detection datasets",
+  "author": "Roman Koshchei <romankoshchei@gmail.com>",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
