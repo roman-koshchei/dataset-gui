@@ -69,6 +69,8 @@
 
 {#each handles as handle}
   <div
+    role="button"
+    tabindex="-1"
     aria-label={handle.label}
     class={[
       numberToTailwindBorder(classId),
