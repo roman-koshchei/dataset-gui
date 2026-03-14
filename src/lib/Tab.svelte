@@ -17,13 +17,16 @@
       return;
     }
 
-    isEdit = false;
-    await Promise.all([
-      loadWholeDataset({ imagesDir, labelsDir }).then((x) => {
-        datasetItems = x;
-      }),
-      pushToHistory(imagesDir, labelsDir),
-    ]);
+    errorMessage = "";
+    try {
+      const items = await loadWholeDataset({ imagesDir, labelsDir });
+      datasetItems = items;
+      isEdit = false;
+      await pushToHistory(imagesDir, labelsDir);
+    } catch (err) {
+      isEdit = true;
+      errorMessage = err instanceof Error ? err.message : String(err);
+    }
   }
 </script>
 
@@ -34,25 +37,27 @@
         <h2 class="text-xl">Add new dataset</h2>
 
         <form onsubmit={selectDataset}>
-          <label class="space-y-2 block">
-            Images directory
-            <input
-              type="text"
-              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
-              placeholder="Enter images folder..."
-              bind:value={imagesDir}
-            />
-          </label>
+           <label class="space-y-2 block">
+             Images directory
+             <input
+               type="text"
+               class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+               placeholder="Enter images folder..."
+               bind:value={imagesDir}
+               oninput={() => errorMessage = ""}
+             />
+           </label>
 
-          <label class="mt-2 space-y-2 block">
-            Labels directory
-            <input
-              type="text"
-              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
-              placeholder="Enter labels folder..."
-              bind:value={labelsDir}
-            />
-          </label>
+           <label class="mt-2 space-y-2 block">
+             Labels directory
+             <input
+               type="text"
+               class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+               placeholder="Enter labels folder..."
+               bind:value={labelsDir}
+               oninput={() => errorMessage = ""}
+             />
+           </label>
 
           {#if errorMessage}
             <p class="mt-4 text-red-500">{errorMessage}</p>
@@ -77,6 +82,7 @@
             >
               <button
                 onclick={async () => {
+                  errorMessage = "";
                   imagesDir = dataset.imagesDir;
                   labelsDir = dataset.labelsDir;
                   await selectDataset();
