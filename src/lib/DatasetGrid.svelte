@@ -30,6 +30,37 @@
   let batchOffset = $state(0);
   let totalItemCount = $state<number | null>(null);
 
+  let filterHasBoxes = $state(false);
+  let filterNoBoxes = $state(false);
+  let filterByClass = $state(false);
+  let filterClassId = $state<string>("0");
+
+  let filteredItems = $derived(() => {
+    if (!filterHasBoxes && !filterNoBoxes && !filterByClass) {
+      return loadedItems;
+    }
+
+    return loadedItems.filter(item => {
+      const hasLabels = item.labels && item.labels.length > 0;
+
+      if (filterHasBoxes) {
+        return hasLabels;
+      }
+
+      if (filterNoBoxes) {
+        return !hasLabels;
+      }
+
+      if (filterByClass) {
+        const classId = parseInt(filterClassId, 10);
+        if (isNaN(classId)) return false;
+        return item.labels.some(label => label.classId === classId);
+      }
+
+      return true;
+    });
+  });
+
   let scrollContainer: HTMLDivElement | undefined = undefined;
   let sentinel: HTMLDivElement | undefined = undefined;
   let observer: IntersectionObserver | null = null;
@@ -152,14 +183,24 @@
       onclick={async () => {
         try {
           reloadIsActive = true;
-          const newItems = await loadWholeDataset(dataset);
-          items = newItems;
-          loadedItems = newItems;
-          hasMore = false;
-          batchOffset = newItems.length;
-          if (totalItemCount !== null) {
-            totalItemCount = newItems.length;
+          
+          loadedItems = [];
+          batchOffset = 0;
+          hasMore = true;
+          
+          const count = await getDatasetCount(dataset);
+          totalItemCount = count;
+          
+          filterHasBoxes = false;
+          filterNoBoxes = false;
+          filterByClass = false;
+          filterClassId = "0";
+          
+          if (items) {
+            items = [];
           }
+          
+          await loadMoreItems();
         } catch (err) {
           alert(`Failed to reload dataset: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
@@ -188,19 +229,53 @@
       Save all changes
     </button>
 
-    <!--
-    <label class="px-3 flex items-center gap-2 border-r border-zinc-700">
-      <input type="checkbox" bind:checked={showOnlyItemsWith0Labels} />
-      Show only items with 0 labels
-    </label>
-    -->
+    <button
+      class="px-3 border-r border-zinc-700 py-1 {filterHasBoxes ? 'bg-zinc-600' : ''}"
+      onclick={() => {
+        filterHasBoxes = !filterHasBoxes;
+        filterNoBoxes = false;
+        filterByClass = false;
+      }}
+    >
+      Has boxes
+    </button>
+
+    <button
+      class="px-3 border-r border-zinc-700 py-1 {filterNoBoxes ? 'bg-zinc-600' : ''}"
+      onclick={() => {
+        filterNoBoxes = !filterNoBoxes;
+        filterHasBoxes = false;
+        filterByClass = false;
+      }}
+    >
+      No boxes
+    </button>
+
+    <div class="px-3 flex items-center gap-2 border-r border-zinc-700 {filterByClass ? 'bg-zinc-600' : ''}">
+      <button
+        class="flex items-center gap-2"
+        onclick={() => {
+          filterByClass = !filterByClass;
+          filterHasBoxes = false;
+          filterNoBoxes = false;
+        }}
+      >
+        Class:
+      </button>
+      <input
+        type="text"
+        bind:value={filterClassId}
+        placeholder="0"
+        class="w-12 bg-zinc-800 border border-zinc-600 rounded px-1 text-center"
+      />
+    </div>
   </div>
 
   <div
     bind:this={scrollContainer}
     class="overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 divide-y divide-x divide-zinc-700"
   >
-    {#each loadedItems as item (item.name)}
+    {#each filteredItems() as item (item.name)}
       <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
         <button
           class="relative overflow-hidden"
