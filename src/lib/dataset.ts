@@ -226,3 +226,81 @@ export async function deleteItem(dataset: Dataset, item: DatasetItem) {
     itemLabelPath(dataset, item).then(remove),
   ]);
 }
+
+export async function getDatasetCount(dataset: Dataset): Promise<number> {
+  await validateDirectories(dataset);
+
+  let imageFiles;
+  try {
+    imageFiles = await readDir(dataset.imagesDir);
+    imageFiles = imageFiles.filter((entry) => entry.isFile);
+  } catch (err) {
+    throw new DatasetLoadError(`Failed to read images directory: ${err}`);
+  }
+
+  return imageFiles.length;
+}
+
+export async function loadDatasetBatch(
+  dataset: Dataset,
+  offset: number,
+  limit: number
+): Promise<DatasetItem[]> {
+  await validateDirectories(dataset);
+
+  let imageFiles;
+  try {
+    imageFiles = await readDir(dataset.imagesDir);
+    imageFiles = imageFiles.filter((entry) => entry.isFile);
+  } catch (err) {
+    throw new DatasetLoadError(`Failed to read images directory: ${err}`);
+  }
+
+  const startIdx = offset;
+  const endIdx = Math.min(offset + limit, imageFiles.length);
+
+  if (startIdx >= imageFiles.length) {
+    return [];
+  }
+
+  const batchImageFiles = imageFiles.slice(startIdx, endIdx);
+
+  const itemsPromises = batchImageFiles.map(
+    async (imageFileEntry): Promise<DatasetItem> => {
+      try {
+        const name = removeExtension(imageFileEntry.name);
+        const labelName = `${name}.txt`;
+        const labelPath = await path.join(dataset.labelsDir, labelName);
+        const labels: DatasetLabel[] = [];
+        
+        if (await exists(labelPath)) {
+          try {
+            const lines = await readTextFileLines(labelPath);
+            for await (const line of lines) {
+              if (line.trim()) {
+                labels.push(parseLabelFromYoloLine(line));
+              }
+            }
+          } catch (err) {
+            throw new MalformedLabelError(labelName, err instanceof Error ? err.message : String(err));
+          }
+        }
+        
+        return {
+          name,
+          imageSrc: convertFileSrc(
+            await path.join(dataset.imagesDir, imageFileEntry.name)
+          ),
+          labels,
+        };
+      } catch (err) {
+        if (err instanceof MalformedLabelError) {
+          throw err;
+        }
+        throw new DatasetLoadError(`Failed to load file ${imageFileEntry.name}: ${err}`);
+      }
+    }
+  );
+
+  return await Promise.all(itemsPromises);
+}
