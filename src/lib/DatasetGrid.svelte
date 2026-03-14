@@ -27,8 +27,12 @@
       return;
     }
     const item = items[index];
-    await deleteItem(dataset, item);
-    items.splice(index, 1);
+    try {
+      await deleteItem(dataset, item);
+      items.splice(index, 1);
+    } catch (err) {
+      alert(`Failed to delete ${name}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   function openEditDialog(item: DatasetItem) {
@@ -50,7 +54,7 @@
           const newItems = await loadWholeDataset(dataset);
           items = newItems;
         } catch (err) {
-          alert(`Error during reloading dataset: ${err}`);
+          alert(`Failed to reload dataset: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
           reloadIsActive = false;
         }
@@ -67,7 +71,7 @@
           saveAllIsActive = true;
           await Promise.all(items.map((x) => resaveLabelsToFile(dataset, x)));
         } catch (err) {
-          alert(`Error during saving all changes: ${err}`);
+          alert(`Failed to save all changes: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
           saveAllIsActive = false;
         }
