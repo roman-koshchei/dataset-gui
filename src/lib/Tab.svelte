@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { type DatasetItem, loadWholeDataset } from "./dataset";
-  import DatasetGrid from "./DatasetGrid.svelte";
   import { history, pushToHistory, removeFromHistory } from "./history.svelte";
+  import DatasetGrid from "./DatasetGrid.svelte";
 
   let { active }: { active: boolean } = $props();
 
@@ -9,7 +8,6 @@
   let labelsDir = $state("");
   let errorMessage = $state("");
   let isEdit = $state(true);
-  let datasetItems = $state<DatasetItem[]>([]);
 
   async function selectDataset() {
     if (imagesDir == "" || labelsDir == "") {
@@ -19,8 +17,6 @@
 
     errorMessage = "";
     try {
-      const items = await loadWholeDataset({ imagesDir, labelsDir });
-      datasetItems = items;
       isEdit = false;
       await pushToHistory(imagesDir, labelsDir);
     } catch (err) {
@@ -118,6 +114,6 @@
       </div>
     </div>
   {:else}
-    <DatasetGrid bind:items={datasetItems} dataset={{ imagesDir, labelsDir }} />
+    <DatasetGrid dataset={{ imagesDir, labelsDir }} />
   {/if}
 </div>
