@@ -34,9 +34,11 @@
   let filterNoBoxes = $state(false);
   let filterByClass = $state(false);
   let filterClassId = $state<string>("0");
+  let filterByNth = $state(false);
+  let filterNthValue = $state(1);
 
   let filteredItems = $derived(() => {
-    if (!filterHasBoxes && !filterNoBoxes && !filterByClass) {
+    if (!filterHasBoxes && !filterNoBoxes && !filterByClass && !filterByNth) {
       return loadedItems;
     }
 
@@ -55,6 +57,12 @@
         const classId = parseInt(filterClassId, 10);
         if (isNaN(classId)) return false;
         return item.labels.some(label => label.classId === classId);
+      }
+
+      if (filterByNth) {
+        if (filterNthValue < 1) return false;
+        const index = loadedItems.indexOf(item);
+        return index % filterNthValue === 0;
       }
 
       return true;
@@ -195,6 +203,8 @@
           filterNoBoxes = false;
           filterByClass = false;
           filterClassId = "0";
+          filterByNth = false;
+          filterNthValue = 1;
           
           if (items) {
             items = [];
@@ -258,6 +268,7 @@
           filterByClass = !filterByClass;
           filterHasBoxes = false;
           filterNoBoxes = false;
+          filterByNth = false;
         }}
       >
         Class:
@@ -266,6 +277,27 @@
         type="text"
         bind:value={filterClassId}
         placeholder="0"
+        class="w-12 bg-zinc-800 border border-zinc-600 rounded px-1 text-center"
+      />
+    </div>
+
+    <div class="px-3 flex items-center gap-2 {filterByNth ? 'bg-zinc-600' : ''}">
+      <button
+        class="flex items-center gap-2"
+        onclick={() => {
+          filterByNth = !filterByNth;
+          filterHasBoxes = false;
+          filterNoBoxes = false;
+          filterByClass = false;
+        }}
+      >
+        Every n-th:
+      </button>
+      <input
+        type="number"
+        min="1"
+        bind:value={filterNthValue}
+        placeholder="1"
         class="w-12 bg-zinc-800 border border-zinc-600 rounded px-1 text-center"
       />
     </div>
