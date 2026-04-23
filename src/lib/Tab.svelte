@@ -17,18 +17,25 @@
   } = $props();
 
   type ViewMode = "start" | "dataset" | "videos";
-  let viewMode = $state<ViewMode>(initialState ? "dataset" : "start");
+  let viewMode = $state<ViewMode>("start");
 
-  let imagesDir = $state(initialState?.imagesDir ?? "");
-  let labelsDir = $state(initialState?.labelsDir ?? "");
+  let imagesDir = $state("");
+  let labelsDir = $state("");
+  let initialDatasetApplied = false;
 
-  if (initialState) {
-    pushToHistory(initialState.imagesDir, initialState.labelsDir);
-  }
   let datasetError = $state("");
   let videoError = $state("");
   let videoDataPath = $state("");
   let videosDir = $state("");
+
+  $effect.pre(() => {
+    if (initialDatasetApplied || !initialState) return;
+    initialDatasetApplied = true;
+    viewMode = "dataset";
+    imagesDir = initialState.imagesDir;
+    labelsDir = initialState.labelsDir;
+    void pushToHistory(initialState.imagesDir, initialState.labelsDir);
+  });
 
   let store: Awaited<ReturnType<typeof load>> | null = null;
   async function getStore() {
@@ -55,7 +62,7 @@
     } catch { }
   }
 
-  loadVideoPath();
+  void loadVideoPath();
 
   async function selectDataset() {
     if (imagesDir == "" || labelsDir == "") {

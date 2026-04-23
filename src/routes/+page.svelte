@@ -1,8 +1,6 @@
 <script lang="ts">
-  import type { Dataset } from "$lib/dataset";
-  import { history, loadHistory, initHistory } from "$lib/history.svelte";
+  import { initHistory } from "$lib/history.svelte";
   import Tab from "$lib/Tab.svelte";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
 
   type TabData = {
@@ -33,8 +31,7 @@
   }
 
   $effect(() => {
-    const tab = activeTabId;
-    getCurrentWindow().setTitle(tab);
+    document.title = activeTabId;
   });
 
   onMount(() => {

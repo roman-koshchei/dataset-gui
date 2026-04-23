@@ -289,13 +289,15 @@
         onmouseleave={() => { if (dragging) handleTimelineUp(); }}
       >
         {#each parsedSegments as seg, i}
-          <div
+          <button
+            type="button"
             class="absolute top-0 h-full bg-green-700/60 {isSegmentHighlighted(i) ? '!bg-green-500/80' : 'hover:bg-green-600/80'}"
             style="left: {timeToRatio(seg.start) * 100}%; width: {(timeToRatio(seg.end) - timeToRatio(seg.start)) * 100}%;"
+            aria-label={`Seek to segment ${i + 1}: ${segments[i][0]} to ${segments[i][1]}`}
             onmouseenter={() => hoveredSegment = i}
             onmouseleave={() => hoveredSegment = -1}
             onclick={(e) => { e.stopPropagation(); seekTo(ratioToTime(timelineMousePos(e as unknown as MouseEvent))); }}
-          ></div>
+          ></button>
         {/each}
 
         {#if dragging && duration > 0}
@@ -327,8 +329,10 @@
         <div class="text-xs text-zinc-500">Segments ({segments.length})</div>
         <div class="flex flex-wrap gap-1">
           {#each segments as seg, i}
-            <span
+            <div
               class="text-xs px-2 py-0.5 inline-flex items-center gap-1 {isSegmentHighlighted(i) ? 'bg-green-600 text-white' : 'bg-green-900 text-green-300 hover:bg-green-800'}"
+              role="group"
+              aria-label={`Segment ${i + 1}`}
               onmouseenter={() => hoveredSegment = i}
               onmouseleave={() => hoveredSegment = -1}
             >
@@ -343,7 +347,7 @@
                 tabindex={-1}
                 onclick={(e: Event) => { e.stopPropagation(); removeSegment(i); }}
               >x</button>
-            </span>
+            </div>
           {/each}
         </div>
       </div>

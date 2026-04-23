@@ -2,7 +2,6 @@
   import type { VideoCollection, VideoEntry } from "./video-collection";
   import { extractYouTubeId, findLocalVideo, segmentsMatchFolders, isValidTimecode, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
   import { writeTextFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
-  import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { invoke } from "@tauri-apps/api/core";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import VideoPlayer from "./VideoPlayer.svelte";
@@ -42,6 +41,42 @@
   let resolvedVideosDir = $derived(
     videosDir || (dataPath.replace(/[^/\\]+$/, "") + "videos")
   );
+
+  async function openVideoUrl(url: string) {
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(url);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function openFilePath(path: string) {
+    try {
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(path);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function toggleSegmentPreview(container: HTMLElement, segKey: string) {
+    const vid = container.querySelector("video") as HTMLVideoElement | null;
+    if (!vid) return;
+    if (vid.paused) {
+      document.querySelectorAll<HTMLVideoElement>("#segment-grid video").forEach(v => {
+        if (v !== vid && !v.paused) {
+          v.pause();
+          v.currentTime = 0;
+        }
+      });
+      void vid.play();
+      playingSegment = segKey;
+    } else {
+      vid.pause();
+      playingSegment = null;
+    }
+  }
 
   function segmentVideoPath(entry: VideoEntry, seg: string[]): string | null {
     const vid = getVideoId(entry);
@@ -397,7 +432,7 @@
                     {#if video.url}
                       <button
                         class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
-                        onclick={async () => { try { await openUrl(video.url) } catch (e) { error = e instanceof Error ? e.message : String(e) } }}
+                        onclick={() => openVideoUrl(video.url)}
                       >
                         Open
                       </button>
@@ -418,7 +453,7 @@
                     {#if resolvedFilePath(video)}
                       <button
                         class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
-                        onclick={async () => { try { await openPath(resolvedFilePath(video)!) } catch (e) { error = e instanceof Error ? e.message : String(e) } }}
+                        onclick={() => openFilePath(resolvedFilePath(video)!)}
                       >
                         Play
                       </button>
@@ -532,21 +567,20 @@
                     {@const segKey = `${selectedVideoIndex}-${si}`}
                     {@const segPath = segmentVideoPath(video, seg)}
                     {@const thumbPath = segmentFramePath(video, seg)}
-                    <button
+                    <div
                       class="relative bg-zinc-900 border overflow-hidden group {highlightedSegIndex === si ? 'border-green-500' : 'border-zinc-700 hover:border-zinc-500'}"
+                      role="button"
+                      tabindex={0}
+                      aria-label={`Preview segment ${seg[0]} to ${seg[1]}`}
                       onmouseenter={() => highlightedSegIndex = si}
                       onmouseleave={() => highlightedSegIndex = -1}
                       onclick={(e) => {
-                        const vid = (e.currentTarget.querySelector('video') as HTMLVideoElement | null);
-                        if (!vid) return;
-                        if (vid.paused) {
-                          document.querySelectorAll<HTMLVideoElement>('#segment-grid video').forEach(v => { if (v !== vid && !v.paused) { v.pause(); v.currentTime = 0; } });
-                          vid.play();
-                          playingSegment = segKey;
-                        } else {
-                          vid.pause();
-                          playingSegment = null;
-                        }
+                        toggleSegmentPreview(e.currentTarget as HTMLElement, segKey);
+                      }}
+                      onkeydown={(e) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        e.preventDefault();
+                        toggleSegmentPreview(e.currentTarget as HTMLElement, segKey);
                       }}
                     >
                       {#if segPath}
@@ -565,22 +599,22 @@
                             <span class="text-white/50 text-lg cursor-pointer">Play</span>
                           </div>
                         {/if}
-                        <span
-                          role="button"
-                          tabindex={0}
+                        <button
+                          type="button"
+                          aria-label={`Open folder for segment ${seg[0]} to ${seg[1]}`}
                           class="absolute top-1 right-1 text-zinc-400 hover:text-zinc-200 bg-black/50 px-1 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                           onclick={(e) => {
                             e.stopPropagation();
                             const dir = segPath!.replace(/[/\\][^/\\]+$/, '');
-                            openPath(dir);
+                            void openFilePath(dir);
                           }}
                         >
                           dir
-                        </span>
+                        </button>
                         {#if segmentHasDataset.get(segmentToFolderName(seg)) && openDatasetInNewTab}
-                          <span
-                            role="button"
-                            tabindex={0}
+                          <button
+                            type="button"
+                            aria-label={`Open dataset for segment ${seg[0]} to ${seg[1]}`}
                             class="absolute top-1 left-1 text-blue-400 hover:text-blue-300 bg-black/50 px-1 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                             onclick={(e) => {
                               e.stopPropagation();
@@ -590,7 +624,7 @@
                             }}
                           >
                             dataset
-                          </span>
+                          </button>
                         {/if}
                       {:else}
                         <div class="w-full aspect-video bg-zinc-800 grid place-content-center text-zinc-600 text-xs">
@@ -601,7 +635,7 @@
                         <span>{seg[0]}–{seg[1]}</span>
                         <span>{formatTimecode(parseTimecode(seg[1]) - parseTimecode(seg[0]))}</span>
                       </div>
-                    </button>
+                    </div>
                   {/each}
                 </div>
               </div>

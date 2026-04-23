@@ -3,14 +3,12 @@
     deleteItem,
     itemImagePath,
     itemLabelPath,
-    loadWholeDataset,
     resaveLabelsToFile,
     getDatasetCount,
     loadDatasetBatch,
     type Dataset,
     type DatasetItem,
   } from "./dataset";
-  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import EditDialog from "./EditDialog.svelte";
   import { numberToTailwindBorder, numberToTailwindBg } from "./helpers";
   import { onMount } from "svelte";
@@ -29,6 +27,11 @@
   let hasMore = $state(true);
   let batchOffset = $state(0);
   let totalItemCount = $state<number | null>(null);
+
+  async function revealPaths(paths: string[]) {
+    const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+    await revealItemInDir(paths);
+  }
 
   let filterHasBoxes = $state(false);
   let filterNoBoxes = $state(false);
@@ -370,7 +373,7 @@
           <button
             class="bg-zinc-700 px-1"
             onclick={async () => {
-              await revealItemInDir(
+              await revealPaths(
                 await Promise.all([
                   itemLabelPath(dataset, item),
                   itemImagePath(dataset, item),
