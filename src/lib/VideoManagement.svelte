@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { VideoCollection, VideoEntry } from "./video-collection";
   import { extractYouTubeId, findLocalVideo, segmentsMatchFolders, isValidTimecode, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
-  import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
+  import { writeTextFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
   import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { invoke } from "@tauri-apps/api/core";
   import { convertFileSrc } from "@tauri-apps/api/core";
@@ -11,10 +11,12 @@
     dataPath,
     videosDir = "",
     onBack,
+    openDatasetInNewTab,
   }: {
     dataPath: string;
     videosDir?: string;
     onBack: () => void;
+    openDatasetInNewTab?: (imagesDir: string, labelsDir: string, label: string) => void;
   } = $props();
 
   let collection = $state<VideoCollection | null>(null);
@@ -51,6 +53,18 @@
     const vid = getVideoId(entry);
     if (!vid) return null;
     return `${resolvedVideosDir}\\${vid}\\${segmentToFolderName(seg)}\\frames\\0001.png`;
+  }
+
+  function segmentFramesDir(entry: VideoEntry, seg: string[]): string | null {
+    const vid = getVideoId(entry);
+    if (!vid) return null;
+    return `${resolvedVideosDir}\\${vid}\\${segmentToFolderName(seg)}\\frames`;
+  }
+
+  function segmentLabelsDir(entry: VideoEntry, seg: string[]): string | null {
+    const vid = getVideoId(entry);
+    if (!vid) return null;
+    return `${resolvedVideosDir}\\${vid}\\${segmentToFolderName(seg)}\\labels`;
   }
 
   function getVideoId(entry: VideoEntry): string | null {
@@ -94,6 +108,35 @@
     if (segmentsMatchFolders(segs, folders)) return "uptodate";
     return "stale";
   }
+
+  let segmentHasDataset = $state<Map<string, boolean>>(new Map());
+
+  $effect(() => {
+    const vi = selectedVideoIndex;
+    segmentHasDataset = new Map();
+    if (!openDatasetInNewTab || vi < 0 || !collection) return;
+    const video = collection.videos[vi];
+    if (!video?.keep_segments) return;
+
+    Promise.all(
+      video.keep_segments.map(async (seg) => {
+        const key = segmentToFolderName(seg);
+        const fDir = segmentFramesDir(video, seg);
+        const lDir = segmentLabelsDir(video, seg);
+        if (!fDir || !lDir) return { key, available: false };
+        try {
+          const [fOk, lOk] = await Promise.all([exists(fDir), exists(lDir)]);
+          return { key, available: fOk && lOk };
+        } catch {
+          return { key, available: false };
+        }
+      })
+    ).then((results) => {
+      const map = new Map<string, boolean>();
+      for (const r of results) map.set(r.key, r.available);
+      segmentHasDataset = map;
+    });
+  });
 
   function resolvedFilePath(entry: VideoEntry): string | undefined {
     if (entry.file_path) return entry.file_path;
@@ -534,6 +577,21 @@
                         >
                           dir
                         </span>
+                        {#if segmentHasDataset.get(segmentToFolderName(seg)) && openDatasetInNewTab}
+                          <span
+                            role="button"
+                            tabindex={0}
+                            class="absolute top-1 left-1 text-blue-400 hover:text-blue-300 bg-black/50 px-1 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              const fDir = segmentFramesDir(video, seg)!;
+                              const lDir = segmentLabelsDir(video, seg)!;
+                              openDatasetInNewTab(fDir, lDir, `${getVideoId(video)}-${segmentToFolderName(seg)}`);
+                            }}
+                          >
+                            dataset
+                          </span>
+                        {/if}
                       {:else}
                         <div class="w-full aspect-video bg-zinc-800 grid place-content-center text-zinc-600 text-xs">
                           N/A

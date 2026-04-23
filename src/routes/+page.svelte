@@ -5,7 +5,13 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
 
-  let tabs = $state<{ id: string }[]>([{ id: crypto.randomUUID() }]);
+  type TabData = {
+    id: string;
+    label?: string;
+    initialState?: { imagesDir: string; labelsDir: string };
+  };
+
+  let tabs = $state<TabData[]>([{ id: crypto.randomUUID() }]);
   let activeTabId = $state<string>(tabs[0].id);
 
   function closeTab(id: string) {
@@ -17,6 +23,12 @@
   function addNewTab() {
     const id = crypto.randomUUID();
     tabs.push({ id });
+    activeTabId = id;
+  }
+
+  function openDatasetInNewTab(imagesDir: string, labelsDir: string, label: string) {
+    const id = crypto.randomUUID();
+    tabs.push({ id, label, initialState: { imagesDir, labelsDir } });
     activeTabId = id;
   }
 
@@ -68,7 +80,7 @@
             activeTabId = tab.id;
           }}
         >
-          {tab.id}
+          {tab.label ?? tab.id.slice(0, 8)}
         </button>
         <button
           class=" border border-transparent hover:border-red-500 transition-colors"
@@ -89,7 +101,7 @@
 
   <div class="overflow-hidden flex">
     {#each tabs as tab (tab.id)}
-      <Tab active={activeTabId === tab.id} />
+      <Tab active={activeTabId === tab.id} {openDatasetInNewTab} initialState={tab.initialState} />
     {/each}
   </div>
 </main>

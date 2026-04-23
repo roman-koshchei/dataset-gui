@@ -6,13 +6,25 @@
   import { writeTextFile } from "@tauri-apps/plugin-fs";
   import { load } from "@tauri-apps/plugin-store";
 
-  let { active }: { active: boolean } = $props();
+  let {
+    active,
+    openDatasetInNewTab,
+    initialState,
+  }: {
+    active: boolean;
+    openDatasetInNewTab?: (imagesDir: string, labelsDir: string, label: string) => void;
+    initialState?: { imagesDir: string; labelsDir: string };
+  } = $props();
 
   type ViewMode = "start" | "dataset" | "videos";
-  let viewMode = $state<ViewMode>("start");
+  let viewMode = $state<ViewMode>(initialState ? "dataset" : "start");
 
-  let imagesDir = $state("");
-  let labelsDir = $state("");
+  let imagesDir = $state(initialState?.imagesDir ?? "");
+  let labelsDir = $state(initialState?.labelsDir ?? "");
+
+  if (initialState) {
+    pushToHistory(initialState.imagesDir, initialState.labelsDir);
+  }
   let datasetError = $state("");
   let videoError = $state("");
   let videoDataPath = $state("");
@@ -223,6 +235,6 @@
   {:else if viewMode === "dataset"}
     <DatasetGrid dataset={{ imagesDir, labelsDir }} />
   {:else if viewMode === "videos"}
-    <VideoManagement dataPath={videoDataPath} {videosDir} onBack={() => viewMode = "start"} />
+    <VideoManagement dataPath={videoDataPath} {videosDir} onBack={() => viewMode = "start"} {openDatasetInNewTab} />
   {/if}
 </div>
