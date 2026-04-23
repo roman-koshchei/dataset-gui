@@ -17,6 +17,13 @@
     "fs:allow-read-text-file-lines",
     "fs:allow-remove",
     "opener:allow-reveal-item-in-dir",
+    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "**" }
+      ]
+    },
     {
       "identifier": "fs:scope",
       "allow": [

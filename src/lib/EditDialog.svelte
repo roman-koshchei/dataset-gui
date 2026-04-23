@@ -12,10 +12,14 @@
     dataset,
     item = $bindable(),
     onClose,
+    onPrev,
+    onNext,
   }: {
     dataset: Dataset;
     item: DatasetItem | null;
     onClose: () => void;
+    onPrev?: () => void;
+    onNext?: () => void;
   } = $props();
 
   let dialog: HTMLDialogElement;
@@ -64,6 +68,15 @@
   function handleClose() {
     onClose();
     selectedLabelIndex = -1;
+  }
+
+  async function navigate(callback: () => void) {
+    if (hasUnsavedChanges && saveStatus !== "saving") {
+      await performSave();
+    }
+    selectedLabelIndex = -1;
+    saveStatus = null;
+    callback();
   }
 
   async function performSave() {
@@ -284,12 +297,28 @@
     </div>
 
     <div class="bg-zinc-900 p-5 border-l border-zinc-700 space-y-3">
-      <button
-        class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300"
-        onclick={handleClose}
-      >
-        Close
-      </button>
+      <div class="flex gap-2">
+        <button
+          class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
+          onclick={() => onPrev?.()}
+          disabled={!onPrev}
+        >
+          Prev
+        </button>
+        <button
+          class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
+          onclick={() => onNext?.()}
+          disabled={!onNext}
+        >
+          Next
+        </button>
+        <button
+          class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300"
+          onclick={handleClose}
+        >
+          Close
+        </button>
+      </div>
 
       <label class="block text-white">
         Class ID

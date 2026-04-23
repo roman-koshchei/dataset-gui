@@ -69,6 +69,26 @@
     });
   });
 
+  let onPrev = $derived(() => {
+    if (!selectedItem) return undefined;
+    const items = filteredItems();
+    const idx = items.findIndex((x) => x.name === selectedItem!.name);
+    if (idx <= 0) return undefined;
+    return () => {
+      selectedItem = items[idx - 1];
+    };
+  });
+
+  let onNext = $derived(() => {
+    if (!selectedItem) return undefined;
+    const items = filteredItems();
+    const idx = items.findIndex((x) => x.name === selectedItem!.name);
+    if (idx === -1 || idx >= items.length - 1) return undefined;
+    return () => {
+      selectedItem = items[idx + 1];
+    };
+  });
+
   let scrollContainer: HTMLDivElement | undefined = undefined;
   let sentinel: HTMLDivElement | undefined = undefined;
   let observer: IntersectionObserver | null = null;
@@ -371,4 +391,4 @@
   </div>
 </section>
 
-<EditDialog {dataset} bind:item={selectedItem} onClose={closeEditDialog} />
+<EditDialog {dataset} bind:item={selectedItem} onClose={closeEditDialog} onPrev={onPrev()} onNext={onNext()} />
