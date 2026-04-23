@@ -338,6 +338,44 @@ fn unwatch_directories(
     Ok(())
 }
 
+#[tauri::command]
+fn list_video_files(dir: String) -> Result<Vec<String>, String> {
+    let path = Path::new(&dir);
+    if !path.exists() {
+        return Err(format!("Directory does not exist: {}", dir));
+    }
+    let video_exts: Vec<&str> = vec![
+        "mp4", "mkv", "webm", "avi", "mov", "flv", "wmv", "m4v", "ts", "mpg", "mpeg",
+    ];
+    let entries: Vec<String> = fs::read_dir(path)
+        .map_err(|e| format!("Failed to read directory: {}", e))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+            video_exts.contains(&ext.as_str())
+        })
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    Ok(entries)
+}
+
+#[tauri::command]
+fn list_subdirs(dir: String) -> Result<Vec<String>, String> {
+    let path = Path::new(&dir);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let entries: Vec<String> = fs::read_dir(path)
+        .map_err(|e| format!("Failed to read directory: {}", e))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    Ok(entries)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -357,6 +395,8 @@ pub fn run() {
             get_item_paths,
             watch_directories,
             unwatch_directories,
+            list_video_files,
+            list_subdirs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
