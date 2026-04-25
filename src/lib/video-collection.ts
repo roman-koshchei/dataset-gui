@@ -1,5 +1,6 @@
 export type VideoEntry = {
-  url: string;
+  url?: string;
+  file?: string;
   file_path?: string;
   tags: string[];
   keep_segments?: string[][];
@@ -17,7 +18,7 @@ export function emptyVideoCollection(): VideoCollection {
     collection: "",
     source: "",
     split_fps: 30,
-    videos: [{ url: "", tags: [] }],
+    videos: [{ tags: [] }],
   };
 }
 
@@ -34,18 +35,33 @@ export function extractYouTubeId(url: string): string | null {
   return null;
 }
 
+export function extractXId(url: string): string | null {
+  const match = url.match(/x\.com\/i\/status\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+export function extractVideoId(url: string): string | null {
+  return extractYouTubeId(url) ?? extractXId(url);
+}
+
+export function extractFileStem(file: string): string | null {
+  const name = file.replace(/[/\\]/g, "/").split("/").pop() ?? "";
+  const stem = name.replace(/\.[^.]+$/, "");
+  return stem || null;
+}
+
 export function findLocalVideo(
   files: string[],
-  ytId: string | null
+  videoId: string | null
 ): string | undefined {
-  if (!ytId) return undefined;
-  return files.find((f) => f.includes(ytId));
+  if (!videoId) return undefined;
+  return files.find((f) => f.includes(videoId));
 }
 
 export function parseTimecode(tc: string): number {
-  const parts = tc.split(":").map(Number);
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  const parts = tc.split(":");
+  if (parts.length === 2) return Number(parts[0]) * 60 + Number(parts[1]);
+  if (parts.length === 3) return Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number(parts[2]);
   return 0;
 }
 
@@ -59,9 +75,14 @@ export function isValidTimecode(tc: string): boolean {
 export function formatTimecode(seconds: number): string {
   seconds = Math.max(0, seconds);
   const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  if (s === 60) return `${m + 1}:00`;
-  return `${m}:${s.toString().padStart(2, "0")}`;
+  const s = seconds % 60;
+  const whole = Math.floor(s);
+  const frac = s - whole;
+  if (frac > 0.001) {
+    const ms = Math.round(frac * 1000);
+    return `${m}:${whole.toString().padStart(2, "0")}.${ms.toString().padStart(3, "0")}`;
+  }
+  return `${m}:${whole.toString().padStart(2, "0")}`;
 }
 
 export function segmentToFolderName(segment: string[]): string {

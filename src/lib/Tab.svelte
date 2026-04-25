@@ -5,6 +5,7 @@
   import { emptyVideoCollection } from "./video-collection";
   import { writeTextFile } from "@tauri-apps/plugin-fs";
   import { load } from "@tauri-apps/plugin-store";
+  import type { Dataset } from "./dataset";
 
   let {
     active,
@@ -12,15 +13,14 @@
     initialState,
   }: {
     active: boolean;
-    openDatasetInNewTab?: (imagesDir: string, labelsDir: string, label: string) => void;
-    initialState?: { imagesDir: string; labelsDir: string };
+    openDatasetInNewTab?: (dataset: Dataset, label: string) => void;
+    initialState?: Dataset;
   } = $props();
 
   type ViewMode = "start" | "dataset" | "videos";
   let viewMode = $state<ViewMode>("start");
 
-  let imagesDir = $state("");
-  let labelsDir = $state("");
+  let dataset = $state<Dataset | null>(null);
   let initialDatasetApplied = false;
 
   let datasetError = $state("");
@@ -32,9 +32,10 @@
     if (initialDatasetApplied || !initialState) return;
     initialDatasetApplied = true;
     viewMode = "dataset";
-    imagesDir = initialState.imagesDir;
-    labelsDir = initialState.labelsDir;
-    void pushToHistory(initialState.imagesDir, initialState.labelsDir);
+    dataset = initialState;
+    if ("imagesDir" in initialState) {
+      void pushToHistory(initialState.imagesDir, initialState.labelsDir);
+    }
   });
 
   let store: Awaited<ReturnType<typeof load>> | null = null;
@@ -64,6 +65,9 @@
 
   void loadVideoPath();
 
+  let imagesDir = $state("");
+  let labelsDir = $state("");
+
   async function selectDataset() {
     if (imagesDir == "" || labelsDir == "") {
       datasetError = "Images and labels directories must be specified";
@@ -72,6 +76,7 @@
 
     datasetError = "";
     try {
+      dataset = { imagesDir, labelsDir };
       viewMode = "dataset";
       await pushToHistory(imagesDir, labelsDir);
     } catch (err) {
@@ -198,33 +203,33 @@
         <h2 class="text-xl">Select from history</h2>
 
         <div class="space-y-3">
-          {#each history.items as dataset}
+          {#each history.items as histItem}
             <div
               class="grid grid-cols-[1fr_auto] items-stretch border border-zinc-700"
             >
               <button
                 onclick={async () => {
                   datasetError = "";
-                  imagesDir = dataset.imagesDir;
-                  labelsDir = dataset.labelsDir;
+                  imagesDir = histItem.imagesDir;
+                  labelsDir = histItem.labelsDir;
                   await selectDataset();
                 }}
                 class="px-3 py-2 hover:bg-zinc-800 text-left"
               >
-                <p>{dataset.imagesDir}</p>
-                <p>{dataset.labelsDir}</p>
+                <p>{histItem.imagesDir}</p>
+                <p>{histItem.labelsDir}</p>
               </button>
               <div
                 class="border-l border-zinc-700 px-3 grid place-content-center"
               >
                 <button
-                  aria-label={`Delete from history: ${dataset.labelsDir}`}
+                  aria-label={`Delete from history: ${histItem.labelsDir}`}
                   class="py-1 px-3 bg-red-600 hover:bg-red-700"
                   onclick={async () => {
                     try {
                       await removeFromHistory(
-                        dataset.imagesDir,
-                        dataset.labelsDir
+                        histItem.imagesDir,
+                        histItem.labelsDir
                       );
                     } catch (err) {
                       console.error("Failed to remove from history:", err);
@@ -240,7 +245,7 @@
       </div>
     </div>
   {:else if viewMode === "dataset"}
-    <DatasetGrid dataset={{ imagesDir, labelsDir }} />
+    <DatasetGrid dataset={dataset!} />
   {:else if viewMode === "videos"}
     <VideoManagement dataPath={videoDataPath} {videosDir} onBack={() => viewMode = "start"} {openDatasetInNewTab} />
   {/if}

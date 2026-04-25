@@ -2,11 +2,13 @@
   import { initHistory } from "$lib/history.svelte";
   import Tab from "$lib/Tab.svelte";
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import type { Dataset } from "$lib/dataset";
 
   type TabData = {
     id: string;
     label?: string;
-    initialState?: { imagesDir: string; labelsDir: string };
+    initialState?: Dataset;
   };
 
   let tabs = $state<TabData[]>([{ id: crypto.randomUUID() }]);
@@ -24,9 +26,9 @@
     activeTabId = id;
   }
 
-  function openDatasetInNewTab(imagesDir: string, labelsDir: string, label: string) {
+  function openDatasetInNewTab(dataset: Dataset, label: string) {
     const id = crypto.randomUUID();
-    tabs.push({ id, label, initialState: { imagesDir, labelsDir } });
+    tabs.push({ id, label, initialState: dataset });
     activeTabId = id;
   }
 
@@ -34,8 +36,19 @@
     document.title = activeTabId;
   });
 
-  onMount(() => {
+  onMount(async () => {
     initHistory();
+
+    try {
+      const cliArgs = await invoke<{ imagesDir?: string; labelsDir?: string }>("get_cli_args");
+      if (cliArgs.imagesDir && cliArgs.labelsDir) {
+        tabs[0] = {
+          id: tabs[0].id,
+          label: cliArgs.imagesDir.split(/[/\\]/).pop(),
+          initialState: { imagesDir: cliArgs.imagesDir, labelsDir: cliArgs.labelsDir },
+        };
+      }
+    } catch {}
   });
 </script>
 

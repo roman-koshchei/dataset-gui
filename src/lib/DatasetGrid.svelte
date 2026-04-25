@@ -40,12 +40,39 @@
   let filterByNth = $state(false);
   let filterNthValue = $state(1);
 
+  function cloneItem(item: DatasetItem): DatasetItem {
+    return {
+      ...item,
+      labels: item.labels.map((label) => ({ ...label })),
+    };
+  }
+
+  function commitItem(updatedItem: DatasetItem) {
+    const nextItem = cloneItem(updatedItem);
+    const loadedIndex = loadedItems.findIndex((x) => x.name === nextItem.name);
+    if (loadedIndex !== -1) {
+      loadedItems[loadedIndex] = nextItem;
+    }
+
+    if (items) {
+      const itemsIndex = items.findIndex((x) => x.name === nextItem.name);
+      if (itemsIndex !== -1) {
+        items[itemsIndex] = cloneItem(nextItem);
+      }
+    }
+  }
+
+  function commitSelectedItem() {
+    if (!selectedItem) return;
+    commitItem(selectedItem);
+  }
+
   let filteredItems = $derived(() => {
     if (!filterHasBoxes && !filterNoBoxes && !filterByClass && !filterByNth) {
       return loadedItems;
     }
 
-    return loadedItems.filter(item => {
+    return loadedItems.filter((item, index) => {
       const hasLabels = item.labels && item.labels.length > 0;
 
       if (filterHasBoxes) {
@@ -64,7 +91,6 @@
 
       if (filterByNth) {
         if (filterNthValue < 1) return false;
-        const index = loadedItems.indexOf(item);
         return index % filterNthValue === 0;
       }
 
@@ -78,7 +104,8 @@
     const idx = items.findIndex((x) => x.name === selectedItem!.name);
     if (idx <= 0) return undefined;
     return () => {
-      selectedItem = items[idx - 1];
+      commitSelectedItem();
+      selectedItem = cloneItem(items[idx - 1]);
     };
   });
 
@@ -88,7 +115,8 @@
     const idx = items.findIndex((x) => x.name === selectedItem!.name);
     if (idx === -1 || idx >= items.length - 1) return undefined;
     return () => {
-      selectedItem = items[idx + 1];
+      commitSelectedItem();
+      selectedItem = cloneItem(items[idx + 1]);
     };
   });
 
@@ -100,24 +128,19 @@
 
   async function loadMoreItems() {
     if (isLoadingMore || !hasMore) {
-      console.log('loadMoreItems called but skipping:', { isLoadingMore, hasMore, loadedItems: loadedItems.length, totalItemCount });
       return;
     }
 
-    console.log('loadMoreItems starting:', { batchOffset, loadedItems: loadedItems.length, totalItemCount });
     isLoadingMore = true;
     try {
       const newItems = await loadDatasetBatch(dataset, batchOffset, BATCH_SIZE);
-      console.log('loadMoreItems loaded:', newItems.length, 'items');
       loadedItems = [...loadedItems, ...newItems];
       batchOffset += newItems.length;
 
       if (totalItemCount !== null && loadedItems.length >= totalItemCount) {
         hasMore = false;
-        console.log('loadMoreItems: all items loaded');
       } else if (newItems.length < BATCH_SIZE) {
         hasMore = false;
-        console.log('loadMoreItems: no more items available');
       }
     } catch (err) {
       console.error(`Failed to load batch: ${err instanceof Error ? err.message : String(err)}`);
@@ -149,10 +172,11 @@
   }
 
   function openEditDialog(item: DatasetItem) {
-    selectedItem = item;
+    selectedItem = cloneItem(item);
   }
 
   function closeEditDialog() {
+    commitSelectedItem();
     selectedItem = null;
   }
 
@@ -184,7 +208,6 @@
 
       observer = new IntersectionObserver(
         (entries) => {
-          console.log('IntersectionObserver callback:', entries[0].isIntersecting, entries[0]);
           if (entries[0].isIntersecting) {
             loadMoreItems();
           }

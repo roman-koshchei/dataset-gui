@@ -6,6 +6,49 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::{Emitter, State};
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct CliArgs {
+    images_dir: Option<String>,
+    labels_dir: Option<String>,
+}
+
+fn parse_cli_args() -> CliArgs {
+    let args: Vec<String> = std::env::args().collect();
+    let mut result = CliArgs::default();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--images-dir" | "-i" => {
+                if i + 1 < args.len() {
+                    result.images_dir = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            "--labels-dir" | "-l" => {
+                if i + 1 < args.len() {
+                    result.labels_dir = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    result
+}
+
+#[tauri::command]
+fn get_cli_args(cli_args: State<'_, CliArgs>) -> CliArgs {
+    CliArgs {
+        images_dir: cli_args.images_dir.clone(),
+        labels_dir: cli_args.labels_dir.clone(),
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DatasetLabel {
@@ -378,6 +421,7 @@ fn list_subdirs(dir: String) -> Result<Vec<String>, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let cli_args = parse_cli_args();
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
@@ -385,6 +429,7 @@ pub fn run() {
         .manage(Mutex::new(WatchState {
             watchers: HashMap::new(),
         }))
+        .manage(cli_args)
         .invoke_handler(tauri::generate_handler![
             get_dataset_count,
             load_dataset_batch,
@@ -397,6 +442,7 @@ pub fn run() {
             unwatch_directories,
             list_video_files,
             list_subdirs,
+            get_cli_args,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

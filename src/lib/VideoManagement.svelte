@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { VideoCollection, VideoEntry } from "./video-collection";
-  import { extractYouTubeId, findLocalVideo, segmentsMatchFolders, isValidTimecode, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
+  import { extractYouTubeId, extractVideoId, extractFileStem, findLocalVideo, segmentsMatchFolders, isValidTimecode, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
   import { writeTextFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
   import { invoke } from "@tauri-apps/api/core";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import VideoPlayer from "./VideoPlayer.svelte";
+  import type { Dataset } from "./dataset";
 
   let {
     dataPath,
@@ -15,7 +16,7 @@
     dataPath: string;
     videosDir?: string;
     onBack: () => void;
-    openDatasetInNewTab?: (imagesDir: string, labelsDir: string, label: string) => void;
+    openDatasetInNewTab?: (dataset: Dataset, label: string) => void;
   } = $props();
 
   let collection = $state<VideoCollection | null>(null);
@@ -29,7 +30,7 @@
     collection
       ? collection.videos
           .map((v, i) => ({ video: v, index: i }))
-          .filter(({ video }) => video.url || video.file_path || video.tags.length > 0 || (video.keep_segments && video.keep_segments.length > 0))
+          .filter(({ video }) => video.url || video.file || video.file_path || video.tags.length > 0 || (video.keep_segments && video.keep_segments.length > 0))
       : []
   );
 
@@ -104,10 +105,15 @@
 
   function getVideoId(entry: VideoEntry): string | null {
     if (entry.file_path) {
-      const name = entry.file_path.replace(/[/\\]/g, "/").split("/").pop() ?? "";
-      return name.replace(/\.[^.]+$/, "") || null;
+      return extractFileStem(entry.file_path);
     }
-    return extractYouTubeId(entry.url);
+    if (entry.file) {
+      return extractFileStem(entry.file);
+    }
+    if (entry.url) {
+      return extractVideoId(entry.url);
+    }
+    return null;
   }
 
   async function loadLocalFiles() {
@@ -146,6 +152,26 @@
 
   let segmentHasDataset = $state<Map<string, boolean>>(new Map());
 
+  async function openAllSegmentsAsDataset() {
+    if (!collection || !openDatasetInNewTab) return;
+    const dirs: { imagesDir: string; labelsDir: string }[] = [];
+    for (const video of collection.videos) {
+      if (!video.keep_segments) continue;
+      for (const seg of video.keep_segments) {
+        const fDir = segmentFramesDir(video, seg);
+        const lDir = segmentLabelsDir(video, seg);
+        if (!fDir || !lDir) continue;
+        try {
+          const [fOk, lOk] = await Promise.all([exists(fDir), exists(lDir)]);
+          if (fOk && lOk) dirs.push({ imagesDir: fDir, labelsDir: lDir });
+        } catch { /* skip */ }
+      }
+    }
+    if (dirs.length === 0) return;
+    const label = collection.collection || dataPath.split(/[/\\]/).slice(-2, -1)[0] || "Dataset";
+    openDatasetInNewTab({ dirs }, label);
+  }
+
   $effect(() => {
     const vi = selectedVideoIndex;
     segmentHasDataset = new Map();
@@ -175,8 +201,9 @@
 
   function resolvedFilePath(entry: VideoEntry): string | undefined {
     if (entry.file_path) return entry.file_path;
-    const ytId = extractYouTubeId(entry.url);
-    const match = findLocalVideo(localFiles, ytId);
+    const videoId = getVideoId(entry);
+    if (!videoId) return undefined;
+    const match = findLocalVideo(localFiles, videoId);
     return match ? `${resolvedVideosDir}\\${match}` : undefined;
   }
 
@@ -344,12 +371,20 @@
          </div>
        {/if}
      </div>
-     <button
-       class="px-3 border-r border-zinc-700 py-1 text-zinc-400 hover:text-zinc-200"
-       onclick={() => loadSegmentFolders()}
-     >
-       Refresh
-     </button>
+      <button
+        class="px-3 border-r border-zinc-700 py-1 text-zinc-400 hover:text-zinc-200"
+        onclick={() => loadSegmentFolders()}
+      >
+        Refresh
+      </button>
+      {#if openDatasetInNewTab}
+        <button
+          class="px-3 border-r border-zinc-700 py-1 text-blue-400 hover:text-blue-300"
+          onclick={openAllSegmentsAsDataset}
+        >
+          Open Dataset
+        </button>
+      {/if}
      <span class="px-3 py-1 text-zinc-500">
        {dataPath}
      </span>
@@ -377,14 +412,22 @@
             onclick={() => selectedVideoIndex = i}
           >
             <div class="flex items-center gap-2">
-              {#if video.url}
+              {#if extractYouTubeId(video.url ?? "")}
                 <img
-                  src="https://img.youtube.com/vi/{extractYouTubeId(video.url)}/default.jpg"
+                  src="https://img.youtube.com/vi/{extractYouTubeId(video.url!)}/default.jpg"
                   alt=""
                   class="w-16 h-10 object-cover flex-shrink-0"
                   loading="lazy"
                   onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 />
+              {:else if resolvedFilePath(video)}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video
+                  src="{convertFileSrc(resolvedFilePath(video)!)}#t=0.5"
+                  preload="metadata"
+                  muted
+                  class="w-16 h-10 object-cover flex-shrink-0"
+                ></video>
               {:else}
                 <div class="w-16 h-10 bg-zinc-800 flex-shrink-0 grid place-content-center text-zinc-600 text-xs">
                   N/A
@@ -392,7 +435,7 @@
               {/if}
               <div class="min-w-0">
                 <p class="truncate text-xs {resolvedFilePath(video) ? 'text-zinc-300' : 'text-zinc-400'}">
-                  {video.url || video.file_path || "(no url)"}
+                  {video.url || video.file || "(no url)"}
                 </p>
                 <div class="flex flex-wrap gap-1 mt-0.5">
                   {#if segmentStatus(video, i) === "uptodate"}
@@ -425,14 +468,14 @@
                     <input
                       type="text"
                       class="flex-1 px-3 py-2 border border-zinc-700 bg-zinc-800"
-                      bind:value={video.url}
-                      oninput={() => hasUnsaved = true}
+                      value={video.url ?? ""}
+                      oninput={(e) => { video.url = (e.target as HTMLInputElement).value || undefined; hasUnsaved = true; }}
                       placeholder="https://www.youtube.com/watch?v=..."
                     />
                     {#if video.url}
                       <button
                         class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
-                        onclick={() => openVideoUrl(video.url)}
+                        onclick={() => openVideoUrl(video.url!)}
                       >
                         Open
                       </button>
@@ -490,13 +533,21 @@
                 </div>
               </div>
 
-              {#if extractYouTubeId(video.url)}
+              {#if extractYouTubeId(video.url ?? "")}
                 <img
-                  src="https://img.youtube.com/vi/{extractYouTubeId(video.url)}/hqdefault.jpg"
+                  src="https://img.youtube.com/vi/{extractYouTubeId(video.url!)}/hqdefault.jpg"
                   alt=""
                   class="w-48 h-auto border border-zinc-700"
                   loading="lazy"
                 />
+              {:else if resolvedFilePath(video)}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video
+                  src="{convertFileSrc(resolvedFilePath(video)!)}#t=0.5"
+                  preload="metadata"
+                  muted
+                  class="w-48 h-auto border border-zinc-700"
+                ></video>
               {/if}
             </div>
 
@@ -620,7 +671,7 @@
                               e.stopPropagation();
                               const fDir = segmentFramesDir(video, seg)!;
                               const lDir = segmentLabelsDir(video, seg)!;
-                              openDatasetInNewTab(fDir, lDir, `${getVideoId(video)}-${segmentToFolderName(seg)}`);
+                              openDatasetInNewTab!({ imagesDir: fDir, labelsDir: lDir }, `${getVideoId(video)}-${segmentToFolderName(seg)}`);
                             }}
                           >
                             dataset

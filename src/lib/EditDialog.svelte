@@ -65,7 +65,10 @@
     return () => clearInterval(autosaveInterval);
   });
 
-  function handleClose() {
+  async function handleClose() {
+    if (hasUnsavedChanges && saveStatus !== "saving") {
+      await performSave();
+    }
     onClose();
     selectedLabelIndex = -1;
   }
@@ -262,12 +265,23 @@
         bind:this={imageContainer}
         class="relative h-fit bg-amber-100/20 w-auto"
       >
-        <img
-          class="w-full h-full max-h-[95vh] object-contain"
-          src={item.imageSrc}
-          alt=""
-          loading="lazy"
-        />
+        <button
+          type="button"
+          class="block bg-transparent border-0 p-0"
+          aria-label="Cancel label selection"
+          onclick={() => {
+            if (selectedLabelIndex !== -1) {
+              selectedLabelIndex = -1;
+            }
+          }}
+        >
+          <img
+            class="w-full h-full max-h-[95vh] object-contain pointer-events-none"
+            src={item.imageSrc}
+            alt=""
+            loading="lazy"
+          />
+        </button>
 
         {#each item.labels as label, labelIndex}
           <button
@@ -283,6 +297,7 @@
             style:width={`${label.width * 100}%`}
             style:height={`${label.height * 100}%`}
             onmousedown={(e) => handleMouseDown(e, labelIndex)}
+            onclick={(e) => e.stopPropagation()}
           >
             {#if selectedLabelIndex === labelIndex}
               <ResizeHandles
