@@ -23,16 +23,48 @@ export function emptyVideoCollection(): VideoCollection {
 }
 
 export function extractYouTubeId(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+
+    if (host === "youtu.be" && pathParts[0]?.match(/^[a-zA-Z0-9_-]{11}$/)) {
+      return pathParts[0];
+    }
+
+    if (host.endsWith("youtube.com")) {
+      const videoId = parsed.searchParams.get("v");
+      if (videoId?.match(/^[a-zA-Z0-9_-]{11}$/)) {
+        return videoId;
+      }
+
+      if (
+        pathParts.length >= 2 &&
+        ["embed", "shorts", "live"].includes(pathParts[0]) &&
+        pathParts[1]?.match(/^[a-zA-Z0-9_-]{11}$/)
+      ) {
+        return pathParts[1];
+      }
+    }
+  } catch {
+    // Fall back to regex parsing for partial or malformed URLs.
+  }
+
   const patterns = [
-    /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
+    /(?:youtube\.com\/watch\?.*v=)([a-zA-Z0-9_-]{11})/,
     /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
-    /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+    /(?:youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/,
   ];
   for (const pattern of patterns) {
     const match = url.match(pattern);
     if (match) return match[1];
   }
   return null;
+}
+
+export function buildYouTubeEmbedUrl(url: string): string | null {
+  const videoId = extractYouTubeId(url);
+  return videoId ? `https://www.youtube-nocookie.com/embed/${videoId}?rel=0` : null;
 }
 
 export function extractXId(url: string): string | null {

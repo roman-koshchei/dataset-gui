@@ -23,6 +23,8 @@
   let error = $state("");
   let hasUnsaved = $state(false);
   let selectedVideoIndex = $state(-1);
+  let selectedVideoIndices = $state<number[]>([]);
+  let lastSelectionAnchorVisible = $state<number | null>(null);
 
   let tagInput = $state("");
 
@@ -59,6 +61,46 @@
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
+  }
+
+  function isVideoSelected(index: number): boolean {
+    return selectedVideoIndices.includes(index);
+  }
+
+  function remapIndicesAfterRemoval(indices: number[], removedIndices: number[]): number[] {
+    const removedSorted = [...removedIndices].sort((a, b) => a - b);
+    const removedSet = new Set(removedSorted);
+
+    return indices.flatMap((index) => {
+      if (removedSet.has(index)) return [];
+
+      let nextIndex = index;
+      for (const removedIndex of removedSorted) {
+        if (removedIndex < index) nextIndex -= 1;
+      }
+      return [nextIndex];
+    });
+  }
+
+  function openVideoDetails(index: number): void {
+    selectedVideoIndex = index;
+  }
+
+  function toggleVideoSelection(index: number, visibleIndex: number, event: MouseEvent) {
+    if (event.shiftKey && lastSelectionAnchorVisible !== null) {
+      const start = Math.min(lastSelectionAnchorVisible, visibleIndex);
+      const end = Math.max(lastSelectionAnchorVisible, visibleIndex);
+      const rangeSelection = visibleVideos.slice(start, end + 1).map(({ index }) => index);
+      selectedVideoIndices = [...new Set([...selectedVideoIndices, ...rangeSelection])];
+    } else {
+      if (isVideoSelected(index)) {
+        selectedVideoIndices = selectedVideoIndices.filter((value) => value !== index);
+      } else {
+        selectedVideoIndices = [...selectedVideoIndices, index];
+      }
+    }
+
+    lastSelectionAnchorVisible = visibleIndex;
   }
 
   function toggleSegmentPreview(container: HTMLElement, segKey: string) {
@@ -224,6 +266,8 @@
       }
       hasUnsaved = false;
       selectedVideoIndex = -1;
+      selectedVideoIndices = [];
+      lastSelectionAnchorVisible = null;
     } catch (err) {
       if (String(err).includes("not found") || String(err).includes("does not exist")) {
         error = `File not found: ${dataPath}`;
@@ -251,6 +295,8 @@
     if (!collection || !addInput.trim()) return;
     collection.videos.push({ url: addInput.trim(), tags: [] });
     selectedVideoIndex = collection.videos.length - 1;
+    selectedVideoIndices = [selectedVideoIndex];
+    lastSelectionAnchorVisible = null;
     hasUnsaved = true;
     addInput = "";
     addMode = "none";
@@ -260,17 +306,37 @@
     if (!collection || !addInput.trim()) return;
     collection.videos.push({ url: "", file_path: addInput.trim(), tags: [] });
     selectedVideoIndex = collection.videos.length - 1;
+    selectedVideoIndices = [selectedVideoIndex];
+    lastSelectionAnchorVisible = null;
     hasUnsaved = true;
     addInput = "";
     addMode = "none";
   }
 
-  function removeVideo(index: number) {
-    if (!collection) return;
-    collection.videos.splice(index, 1);
-    if (selectedVideoIndex === index) selectedVideoIndex = -1;
-    else if (selectedVideoIndex > index) selectedVideoIndex--;
+  function removeVideos(indices: number[]) {
+    if (!collection || indices.length === 0) return;
+
+    const removedIndices = [...new Set(indices)].sort((a, b) => a - b);
+    const removedSet = new Set(removedIndices);
+
+    collection.videos = collection.videos.filter((_, index) => !removedSet.has(index));
+    selectedVideoIndices = remapIndicesAfterRemoval(selectedVideoIndices, removedIndices);
+
+    const remappedSelectedVideoIndex = remapIndicesAfterRemoval(
+      selectedVideoIndex >= 0 ? [selectedVideoIndex] : [],
+      removedIndices,
+    );
+    selectedVideoIndex = remappedSelectedVideoIndex[0] ?? -1;
+    lastSelectionAnchorVisible = null;
     hasUnsaved = true;
+  }
+
+  function removeVideo(index: number) {
+    removeVideos([index]);
+  }
+
+  function removeSelectedVideos() {
+    removeVideos(selectedVideoIndices);
   }
 
   function removeSegment(videoIndex: number, segIndex: number) {
@@ -377,17 +443,31 @@
       >
         Refresh
       </button>
-      {#if openDatasetInNewTab}
-        <button
-          class="px-3 border-r border-zinc-700 py-1 text-blue-400 hover:text-blue-300"
-          onclick={openAllSegmentsAsDataset}
-        >
+      <button
+        class="px-3 border-r border-zinc-700 py-1 {selectedVideoIndices.length > 0 ? 'text-red-400 hover:text-red-300' : 'text-zinc-600'}"
+        onclick={() => {
+          if (selectedVideoIndices.length < 1) return;
+          if (confirm(`Delete ${selectedVideoIndices.length} selected video${selectedVideoIndices.length > 1 ? 's' : ''}?`)) {
+            removeSelectedVideos();
+          }
+        }}
+      >
+        Delete Selected{selectedVideoIndices.length > 0 ? ` (${selectedVideoIndices.length})` : ""}
+      </button>
+       {#if openDatasetInNewTab}
+         <button
+           class="px-3 border-r border-zinc-700 py-1 text-blue-400 hover:text-blue-300"
+           onclick={openAllSegmentsAsDataset}
+         >
           Open Dataset
         </button>
       {/if}
-     <span class="px-3 py-1 text-zinc-500">
-       {dataPath}
-     </span>
+      <span class="px-3 py-1 text-zinc-400">
+        {visibleVideos.length} video{visibleVideos.length !== 1 ? 's' : ''}
+      </span>
+      <span class="px-3 py-1 text-zinc-500">
+        {dataPath}
+      </span>
   </div>
 
   {#if error}
@@ -399,19 +479,38 @@
 
   {#if collection && localFiles.length === 0 && resolvedVideosDir}
     <div class="p-2 bg-yellow-900/30 text-yellow-400 text-sm border-b border-yellow-800/50">
-      No video files found in {resolvedVideosDir} — videos directory may not exist or is empty
+      No local video files found in {resolvedVideosDir} — YouTube videos can still be previewed via embed
     </div>
   {/if}
 
   {#if collection}
     <div class="overflow-hidden grid grid-cols-[360px_1fr] divide-x divide-zinc-700">
       <div class="overflow-y-auto">
-        {#each visibleVideos as { video, index: i }}
-          <button
-            class="w-full text-left px-3 py-2 border-b border-zinc-800 {selectedVideoIndex === i ? 'bg-zinc-700' : 'hover:bg-zinc-800'}"
-            onclick={() => selectedVideoIndex = i}
+        {#each visibleVideos as { video, index: i }, visibleIndex}
+          <div
+            class="w-full text-left px-3 py-2 border-b border-zinc-800 cursor-pointer {selectedVideoIndex === i ? 'bg-zinc-700' : isVideoSelected(i) ? 'bg-zinc-800/80 ring-1 ring-inset ring-zinc-500' : 'hover:bg-zinc-800'}"
+            role="button"
+            tabindex="0"
+            onclick={() => openVideoDetails(i)}
+            onkeydown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              openVideoDetails(i);
+            }}
           >
             <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="w-4 h-4 rounded-sm border flex-shrink-0 grid place-content-center text-[10px] {isVideoSelected(i) ? 'border-green-500 bg-green-600 text-white' : 'border-zinc-600 text-transparent'}"
+                aria-pressed={isVideoSelected(i)}
+                aria-label={isVideoSelected(i) ? 'Deselect video' : 'Select video'}
+                onclick={(event: MouseEvent) => {
+                  event.stopPropagation();
+                  toggleVideoSelection(i, visibleIndex, event);
+                }}
+              >
+                ✓
+              </button>
               {#if extractYouTubeId(video.url ?? "")}
                 <img
                   src="https://img.youtube.com/vi/{extractYouTubeId(video.url!)}/default.jpg"
@@ -446,13 +545,16 @@
                   {#if resolvedFilePath(video)}
                     <span class="text-[10px] bg-green-900 text-green-400 px-1">downloaded</span>
                   {/if}
+                  {#if isVideoSelected(i)}
+                    <span class="text-[10px] bg-blue-900 text-blue-300 px-1">selected</span>
+                  {/if}
                   {#each video.tags as tag}
                     <span class="text-[10px] bg-zinc-700 px-1">{tag}</span>
                   {/each}
                 </div>
               </div>
             </div>
-          </button>
+          </div>
         {/each}
       </div>
 
@@ -554,9 +656,10 @@
             <div class="space-y-3">
                <VideoPlayer
                  filePath={resolvedFilePath(video) ?? ""}
+                 youtubeUrl={video.url ?? ""}
                  segments={video.keep_segments ?? []}
                  onSegmentHover={(i) => highlightedSegIndex = i}
-                  onSegmentsChange={(segs) => {
+                   onSegmentsChange={(segs) => {
                    const seen = new Set<string>();
                    video.keep_segments = segs.filter(s => {
                      const key = `${s[0]}|${s[1]}`;

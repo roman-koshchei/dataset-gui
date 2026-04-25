@@ -1,14 +1,16 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
+  import { buildYouTubeEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
 
   let {
     filePath,
+    youtubeUrl = "",
     segments = [],
     onSegmentsChange,
     onSegmentHover,
   }: {
     filePath: string;
+    youtubeUrl?: string;
     segments?: string[][];
     onSegmentsChange: (segments: string[][]) => void;
     onSegmentHover?: (index: number) => void;
@@ -50,6 +52,7 @@
   });
 
   let videoSrc = $derived(filePath ? convertFileSrc(filePath) : "");
+  let youtubeEmbedSrc = $derived(youtubeUrl ? buildYouTubeEmbedUrl(youtubeUrl) : "");
 
   function timeToRatio(t: number): number {
     return duration > 0 ? t / duration : 0;
@@ -353,6 +356,53 @@
       </div>
     {/if}
   </div>
+{:else if youtubeEmbedSrc}
+  <div class="space-y-3">
+    <div class="relative bg-black aspect-video max-w-2xl mx-auto border border-zinc-700">
+      <iframe
+        src={youtubeEmbedSrc}
+        title="YouTube video player"
+        class="w-full h-full"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen
+      ></iframe>
+    </div>
+
+    <div class="text-sm text-zinc-400 bg-zinc-900/50 px-3 py-2 border border-zinc-800">
+      YouTube preview is view-only. Timeline editing still requires a local video file.
+    </div>
+
+    {#if invalidSegmentCount > 0}
+      <div class="text-sm text-yellow-400 bg-yellow-900/30 px-3 py-2 border border-yellow-800/50">
+        {invalidSegmentCount} segment{invalidSegmentCount > 1 ? 's have' : ' has'} invalid timecode format
+      </div>
+    {/if}
+
+    {#if segments.length > 0}
+      <div class="space-y-1">
+        <div class="text-xs text-zinc-500">Segments ({segments.length})</div>
+        <div class="flex flex-wrap gap-1">
+          {#each segments as seg, i}
+            <div
+              class="text-xs px-2 py-0.5 inline-flex items-center gap-1 {isSegmentHighlighted(i) ? 'bg-green-600 text-white' : 'bg-green-900 text-green-300'}"
+              role="group"
+              aria-label={`Segment ${i + 1}`}
+              onmouseenter={() => hoveredSegment = i}
+              onmouseleave={() => hoveredSegment = -1}
+            >
+              <span>{seg[0]}–{seg[1]}</span>
+              <button
+                class="text-red-400 hover:text-red-300 text-[10px]"
+                tabindex={-1}
+                onclick={(e: Event) => { e.stopPropagation(); removeSegment(i); }}
+              >x</button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
 {:else}
-  <div class="text-zinc-600 text-sm">No local video file found</div>
+  <div class="text-zinc-600 text-sm">No local video file or YouTube URL found</div>
 {/if}
