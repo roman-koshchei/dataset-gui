@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { VideoCollection, VideoEntry } from "./video-collection";
-  import { extractYouTubeId, extractVideoId, extractFileStem, findLocalVideo, segmentsMatchFolders, isValidTimecode, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
+  import { extractYouTubeId, extractVideoId, extractFileStem, findLocalVideo, segmentsMatchFolders, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
   import { writeTextFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
   import { invoke } from "@tauri-apps/api/core";
   import { convertFileSrc } from "@tauri-apps/api/core";
@@ -51,6 +51,19 @@
       await openUrl(url);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function openFilePathInViewer(path: string) {
+    try {
+      await invoke("reveal_in_file_manager", { path });
+    } catch {
+      try {
+        const { openPath } = await import("@tauri-apps/plugin-opener");
+        await openPath(path);
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+      }
     }
   }
 
@@ -437,12 +450,12 @@
          </div>
        {/if}
      </div>
-      <button
-        class="px-3 border-r border-zinc-700 py-1 text-zinc-400 hover:text-zinc-200"
-        onclick={() => loadSegmentFolders()}
-      >
-        Refresh
-      </button>
+       <button
+         class="px-3 border-r border-zinc-700 py-1 text-zinc-400 hover:text-zinc-200"
+         onclick={() => loadSegmentFolders()}
+       >
+         Refresh
+       </button>
       <button
         class="px-3 border-r border-zinc-700 py-1 {selectedVideoIndices.length > 0 ? 'text-red-400 hover:text-red-300' : 'text-zinc-600'}"
         onclick={() => {
@@ -598,9 +611,15 @@
                     {#if resolvedFilePath(video)}
                       <button
                         class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
-                        onclick={() => openFilePath(resolvedFilePath(video)!)}
+                        onclick={() => navigator.clipboard.writeText(resolvedFilePath(video)!)}
                       >
-                        Play
+                        Copy path
+                      </button>
+                      <button
+                        class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
+                        onclick={() => openFilePathInViewer(resolvedFilePath(video)!)}
+                      >
+                        Open
                       </button>
                     {/if}
                   </div>
