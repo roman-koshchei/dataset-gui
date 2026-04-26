@@ -48,6 +48,20 @@ export function numberToTailwindBg(n: number) {
   return bgClasses[index];
 }
 
+export function numberToAccentPalette(n: number) {
+  const hue = (Math.abs(n) * 137.508) % 360;
+
+  return {
+    solid: `hsl(${hue}, 78%, 62%)`,
+    fill: `hsla(${hue}, 78%, 58%, 0.35)`,
+    fillMuted: `hsla(${hue}, 78%, 58%, 0.18)`,
+    fillStrong: `hsla(${hue}, 84%, 64%, 0.52)`,
+    border: `hsla(${hue}, 84%, 70%, 0.75)`,
+    borderStrong: `hsl(${hue}, 92%, 78%)`,
+    text: `hsl(${hue}, 92%, 84%)`,
+  };
+}
+
 export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }

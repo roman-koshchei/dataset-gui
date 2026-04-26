@@ -1,6 +1,7 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { buildYouTubeEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
+  import { numberToAccentPalette } from "./helpers";
 
   type ZoomRange = {
     start: number;
@@ -8,6 +9,12 @@
   };
 
   type EdgeDrag = { segIndex: number; edge: "start" | "end" };
+
+  type ParsedSegment = {
+    index: number;
+    start: number;
+    end: number;
+  };
 
   function clampRange(start: number, end: number): ZoomRange {
     return {
@@ -143,20 +150,69 @@
     return clampRange(start, end);
   }
 
+  function moveZoomRange(zoomStart: number, zoomEnd: number, nextStart: number): ZoomRange {
+    const range = zoomEnd - zoomStart;
+
+    let start = nextStart;
+    let end = nextStart + range;
+
+    if (start < 0) {
+      end -= start;
+      start = 0;
+    }
+    if (end > 1) {
+      start -= end - 1;
+      end = 1;
+    }
+
+    return clampRange(start, end);
+  }
+
+  function followPlayheadRange(
+    duration: number,
+    zoomStart: number,
+    zoomEnd: number,
+    currentTime: number,
+  ): ZoomRange {
+    if (duration <= 0) {
+      return { start: zoomStart, end: zoomEnd };
+    }
+
+    const range = zoomEnd - zoomStart;
+    if (range <= 0 || range >= 0.999) {
+      return { start: zoomStart, end: zoomEnd };
+    }
+
+    const normalizedTime = Math.max(0, Math.min(1, currentTime / duration));
+    const leftPadding = range * 0.12;
+    const rightPadding = range * 0.18;
+    const minVisible = zoomStart + leftPadding;
+    const maxVisible = zoomEnd - rightPadding;
+
+    if (normalizedTime < minVisible) {
+      return moveZoomRange(zoomStart, zoomEnd, normalizedTime - leftPadding);
+    }
+
+    if (normalizedTime > maxVisible) {
+      return moveZoomRange(zoomStart, zoomEnd, normalizedTime + rightPadding - range);
+    }
+
+    return { start: zoomStart, end: zoomEnd };
+  }
+
   function splitSegmentsAtTime(
     segments: string[][],
-    parsedSegments: { start: number; end: number }[],
+    parsedSegments: ParsedSegment[],
     currentTime: number,
   ): string[][] | null {
-    for (let i = 0; i < parsedSegments.length; i++) {
-      const segment = parsedSegments[i];
+    for (const segment of parsedSegments) {
       if (currentTime > segment.start + 0.5 && currentTime < segment.end - 0.5) {
         const updated = [...segments];
         updated.splice(
-          i,
+          segment.index,
           1,
-          [segments[i][0], formatTimecode(currentTime)],
-          [formatTimecode(currentTime), segments[i][1]],
+          [segments[segment.index][0], formatTimecode(currentTime)],
+          [formatTimecode(currentTime), segments[segment.index][1]],
         );
         return updated;
       }
@@ -197,12 +253,14 @@
     segments = [],
     onSegmentsChange,
     onSegmentHover,
+    highlightedSegmentIndex = -1,
   }: {
     filePath: string;
     youtubeUrl?: string;
     segments?: string[][];
     onSegmentsChange: (segments: string[][]) => void;
     onSegmentHover?: (index: number) => void;
+    highlightedSegmentIndex?: number;
   } = $props();
 
   let videoEl: HTMLVideoElement | undefined = $state();
@@ -230,6 +288,7 @@
 
   let overviewEl: HTMLDivElement | undefined = $state();
   let overviewDragging = $state(false);
+  let playbackFrame: number | null = null;
 
   let timelineTicks = $derived.by(() => {
     if (duration <= 0) return [];
@@ -266,8 +325,13 @@
 
   let parsedSegments = $derived(
     segments
-      .filter(([s, e]) => isValidTimecode(s) && isValidTimecode(e))
-      .map(([s, e]) => ({ start: parseTimecode(s), end: parseTimecode(e) }))
+      .flatMap(([s, e], index) => {
+        if (!isValidTimecode(s) || !isValidTimecode(e)) {
+          return [];
+        }
+
+        return [{ index, start: parseTimecode(s), end: parseTimecode(e) }];
+      })
   );
 
   let invalidSegmentCount = $derived(
@@ -275,11 +339,15 @@
   );
 
   let activeSegment = $derived(
-    parsedSegments.findIndex(seg => currentTime >= seg.start && currentTime <= seg.end)
+    parsedSegments.find(seg => currentTime >= seg.start && currentTime <= seg.end)?.index ?? -1
+  );
+
+  let isTimelineInteracting = $derived(
+    dragging || isPanning || edgeDrag !== null || overviewDragging
   );
 
   function isSegmentHighlighted(i: number): boolean {
-    return hoveredSegment === i || activeSegment === i;
+    return hoveredSegment === i || activeSegment === i || highlightedSegmentIndex === i;
   }
 
   $effect(() => {
@@ -304,6 +372,31 @@
 
   function tick() {
     if (videoEl) currentTime = videoEl.currentTime;
+  }
+
+  function cancelPlaybackLoop() {
+    if (playbackFrame !== null) {
+      cancelAnimationFrame(playbackFrame);
+      playbackFrame = null;
+    }
+  }
+
+  function startPlaybackLoop() {
+    cancelPlaybackLoop();
+
+    const updatePlaybackTime = () => {
+      const el = videoEl;
+      if (!el || el.paused || el.ended) {
+        playbackFrame = null;
+        return;
+      }
+
+      currentTime = el.currentTime;
+      playbackFrame = requestAnimationFrame(updatePlaybackTime);
+    };
+
+    currentTime = videoEl?.currentTime ?? currentTime;
+    playbackFrame = requestAnimationFrame(updatePlaybackTime);
   }
 
   function togglePlay() {
@@ -446,6 +539,18 @@
   }
 
   $effect(() => {
+    if (!playing || duration <= 0 || isTimelineInteracting) return;
+
+    const nextRange = followPlayheadRange(duration, zoomStart, zoomEnd, currentTime);
+    if (Math.abs(nextRange.start - zoomStart) < 0.0001 && Math.abs(nextRange.end - zoomEnd) < 0.0001) {
+      return;
+    }
+
+    zoomStart = nextRange.start;
+    zoomEnd = nextRange.end;
+  });
+
+  $effect(() => {
     const el = videoEl;
     if (!el) return;
     el.playbackRate = playbackRate;
@@ -454,19 +559,42 @@
   $effect(() => {
     const el = videoEl;
     if (!el) return;
-    const onPlay = () => (playing = true);
-    const onPause = () => (playing = false);
-    const onLoaded = () => { duration = el.duration; videoError = ""; };
-    const onError = () => { videoError = "Failed to load video. The file may be missing, unsupported, or the path may be incorrect."; playing = false; };
+    const onPlay = () => {
+      playing = true;
+      startPlaybackLoop();
+    };
+    const onPause = () => {
+      playing = false;
+      currentTime = el.currentTime;
+      cancelPlaybackLoop();
+    };
+    const onLoaded = () => {
+      duration = el.duration;
+      currentTime = el.currentTime;
+      videoError = "";
+    };
+    const onError = () => {
+      videoError = "Failed to load video. The file may be missing, unsupported, or the path may be incorrect.";
+      playing = false;
+      cancelPlaybackLoop();
+    };
+    const onEnded = () => {
+      playing = false;
+      currentTime = el.currentTime;
+      cancelPlaybackLoop();
+    };
     el.addEventListener("play", onPlay);
     el.addEventListener("pause", onPause);
     el.addEventListener("loadedmetadata", onLoaded);
     el.addEventListener("error", onError);
+    el.addEventListener("ended", onEnded);
     return () => {
+      cancelPlaybackLoop();
       el.removeEventListener("play", onPlay);
       el.removeEventListener("pause", onPause);
       el.removeEventListener("loadedmetadata", onLoaded);
       el.removeEventListener("error", onError);
+      el.removeEventListener("ended", onEnded);
     };
   });
 
@@ -623,27 +751,28 @@
           </span>
         {/each}
 
-        {#each parsedSegments as seg, i}
+        {#each parsedSegments as seg}
+          {@const palette = numberToAccentPalette(seg.index)}
           <div
-            class="absolute top-0 h-[60%] bg-green-700/60 {isSegmentHighlighted(i) ? '!bg-green-500/80' : 'hover:bg-green-600/80'}"
-            style="left: {timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.start) * 100}%; width: {(timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.end) - timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.start)) * 100}%;"
+            class="absolute top-0 h-[60%] transition-colors"
+            style="left: {timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.start) * 100}%; width: {(timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.end) - timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.start)) * 100}%; background-color: {isSegmentHighlighted(seg.index) ? palette.fillStrong : palette.fill};"
             role="button"
             tabindex="-1"
-            aria-label={`Segment ${i + 1}: ${segments[i][0]} to ${segments[i][1]}`}
-            onmouseenter={() => hoveredSegment = i}
+            aria-label={`Segment ${seg.index + 1}: ${segments[seg.index][0]} to ${segments[seg.index][1]}`}
+            onmouseenter={() => hoveredSegment = seg.index}
             onmouseleave={() => hoveredSegment = -1}
             onclick={(e) => { e.stopPropagation(); seekTo(zoomedRatioToTime(duration, zoomStart, zoomEnd, timelineMousePos(e as unknown as MouseEvent))); }}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); seekTo((seg.start + seg.end) / 2); } }}
           >
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
-              class="absolute left-0 top-0 w-1.5 h-full cursor-ew-resize {hoveredSegment === i ? 'hover:bg-white/30' : ''}"
-              onmousedown={(e) => { e.stopPropagation(); edgeDrag = { segIndex: i, edge: "start" }; }}
+              class="absolute left-0 top-0 w-1.5 h-full cursor-ew-resize {hoveredSegment === seg.index ? 'hover:bg-white/30' : ''}"
+              onmousedown={(e) => { e.stopPropagation(); edgeDrag = { segIndex: seg.index, edge: "start" }; }}
             ></div>
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
-              class="absolute right-0 top-0 w-1.5 h-full cursor-ew-resize {hoveredSegment === i ? 'hover:bg-white/30' : ''}"
-              onmousedown={(e) => { e.stopPropagation(); edgeDrag = { segIndex: i, edge: "end" }; }}
+              class="absolute right-0 top-0 w-1.5 h-full cursor-ew-resize {hoveredSegment === seg.index ? 'hover:bg-white/30' : ''}"
+              onmousedown={(e) => { e.stopPropagation(); edgeDrag = { segIndex: seg.index, edge: "end" }; }}
             ></div>
           </div>
         {/each}
@@ -682,9 +811,10 @@
           onmouseleave={handleOverviewUp}
         >
           {#each parsedSegments as seg}
+            {@const palette = numberToAccentPalette(seg.index)}
             <div
-              class="absolute top-0 h-full bg-green-800/40 pointer-events-none"
-              style="left: {timeToRatio(duration, seg.start) * 100}%; width: {(timeToRatio(duration, seg.end) - timeToRatio(duration, seg.start)) * 100}%;"
+              class="absolute top-0 h-full pointer-events-none transition-colors"
+              style="left: {timeToRatio(duration, seg.start) * 100}%; width: {(timeToRatio(duration, seg.end) - timeToRatio(duration, seg.start)) * 100}%; background-color: {isSegmentHighlighted(seg.index) ? palette.fillStrong : palette.fillMuted};"
             ></div>
           {/each}
           <div
@@ -712,12 +842,14 @@
         <div class="text-xs text-zinc-500">Segments ({segments.length})</div>
         <div class="flex flex-wrap gap-1">
           {#each segments as seg, i}
+            {@const palette = numberToAccentPalette(i)}
             <div
-              class="text-xs px-2 py-0.5 inline-flex items-center gap-1 {isSegmentHighlighted(i) ? 'bg-green-600 text-white' : 'bg-green-900 text-green-300 hover:bg-green-800'}"
+              class="text-xs px-2 py-0.5 inline-flex items-center gap-1 transition-colors"
               role="group"
               aria-label={`Segment ${i + 1}`}
               onmouseenter={() => hoveredSegment = i}
               onmouseleave={() => hoveredSegment = -1}
+              style="background-color: {isSegmentHighlighted(i) ? palette.fillStrong : palette.fillMuted}; color: {isSegmentHighlighted(i) ? 'white' : palette.text};"
             >
               <button
                 class="hover:underline"
@@ -764,12 +896,14 @@
         <div class="text-xs text-zinc-500">Segments ({segments.length})</div>
         <div class="flex flex-wrap gap-1">
           {#each segments as seg, i}
+            {@const palette = numberToAccentPalette(i)}
             <div
-              class="text-xs px-2 py-0.5 inline-flex items-center gap-1 {isSegmentHighlighted(i) ? 'bg-green-600 text-white' : 'bg-green-900 text-green-300'}"
+              class="text-xs px-2 py-0.5 inline-flex items-center gap-1 transition-colors"
               role="group"
               aria-label={`Segment ${i + 1}`}
               onmouseenter={() => hoveredSegment = i}
               onmouseleave={() => hoveredSegment = -1}
+              style="background-color: {isSegmentHighlighted(i) ? palette.fillStrong : palette.fillMuted}; color: {isSegmentHighlighted(i) ? 'white' : palette.text};"
             >
               <span>{seg[0]}–{seg[1]}</span>
               <button

@@ -6,6 +6,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import VideoPlayer from "./VideoPlayer.svelte";
   import type { Dataset } from "./dataset";
+  import { numberToAccentPalette } from "./helpers";
 
   let {
     dataPath,
@@ -677,9 +678,10 @@
                  filePath={resolvedFilePath(video) ?? ""}
                  youtubeUrl={video.url ?? ""}
                  segments={video.keep_segments ?? []}
+                 highlightedSegmentIndex={highlightedSegIndex}
                  onSegmentHover={(i) => highlightedSegIndex = i}
-                   onSegmentsChange={(segs) => {
-                   const seen = new Set<string>();
+                    onSegmentsChange={(segs) => {
+                    const seen = new Set<string>();
                    video.keep_segments = segs.filter(s => {
                      const key = `${s[0]}|${s[1]}`;
                      if (seen.has(key)) return false;
@@ -693,35 +695,47 @@
 
             <details class="text-sm">
               <summary class="text-zinc-500 cursor-pointer hover:text-zinc-400">Manual segment edit</summary>
-              <div class="mt-2 space-y-1">
-                {#if video.keep_segments && video.keep_segments.length > 0}
-                  {#each video.keep_segments as seg, si}
-                    <div class="flex items-center gap-2">
-                      <input
-                        type="text"
-                        class="w-20 px-2 py-1 text-sm border border-zinc-700 bg-zinc-800 text-center"
-                        bind:value={video.keep_segments![si][0]}
-                        oninput={() => hasUnsaved = true}
-                        placeholder="0:00"
-                      />
-                      <span class="text-zinc-500">to</span>
-                      <input
-                        type="text"
-                        class="w-20 px-2 py-1 text-sm border border-zinc-700 bg-zinc-800 text-center"
-                        bind:value={video.keep_segments![si][1]}
-                        oninput={() => hasUnsaved = true}
-                        placeholder="0:00"
-                      />
-                      <button
-                        class="text-red-400 hover:text-red-300 text-sm px-1"
-                        onclick={() => removeSegment(selectedVideoIndex, si)}
+               <div class="mt-2 space-y-1">
+                 {#if video.keep_segments && video.keep_segments.length > 0}
+                   {#each video.keep_segments as seg, si}
+                      {@const palette = numberToAccentPalette(si)}
+                      <div
+                        class="flex items-center gap-2 rounded px-2 py-1 transition-colors"
+                        role="group"
+                        aria-label={`Segment ${si + 1}`}
+                        onmouseenter={() => highlightedSegIndex = si}
+                        onmouseleave={() => highlightedSegIndex = -1}
+                        style="background-color: {highlightedSegIndex === si ? palette.fillStrong : palette.fillMuted};"
                       >
-                        x
-                      </button>
-                    </div>
-                  {/each}
-                {:else}
-                  <p class="text-zinc-600">No segments defined</p>
+                        <span
+                          class="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style="background-color: {palette.solid};"
+                        ></span>
+                        <input
+                          type="text"
+                          class="w-20 px-2 py-1 text-sm border border-zinc-700 bg-zinc-800 text-center"
+                          bind:value={video.keep_segments![si][0]}
+                          oninput={() => hasUnsaved = true}
+                          placeholder="0:00"
+                        />
+                        <span style="color: {palette.text};">to</span>
+                        <input
+                          type="text"
+                          class="w-20 px-2 py-1 text-sm border border-zinc-700 bg-zinc-800 text-center"
+                          bind:value={video.keep_segments![si][1]}
+                          oninput={() => hasUnsaved = true}
+                          placeholder="0:00"
+                        />
+                        <button
+                          class="text-red-400 hover:text-red-300 text-sm px-1"
+                          onclick={() => removeSegment(selectedVideoIndex, si)}
+                        >
+                          x
+                        </button>
+                      </div>
+                   {/each}
+                 {:else}
+                   <p class="text-zinc-600">No segments defined</p>
                 {/if}
               </div>
             </details>
@@ -740,13 +754,15 @@
                     {@const segKey = `${selectedVideoIndex}-${si}`}
                     {@const segPath = segmentVideoPath(video, seg)}
                     {@const thumbPath = segmentFramePath(video, seg)}
+                    {@const palette = numberToAccentPalette(si)}
                     <div
-                      class="relative bg-zinc-900 border overflow-hidden group {highlightedSegIndex === si ? 'border-green-500' : 'border-zinc-700 hover:border-zinc-500'}"
+                      class="relative overflow-hidden group transition-colors"
                       role="button"
                       tabindex={0}
                       aria-label={`Preview segment ${seg[0]} to ${seg[1]}`}
                       onmouseenter={() => highlightedSegIndex = si}
                       onmouseleave={() => highlightedSegIndex = -1}
+                      style="background-color: {highlightedSegIndex === si ? palette.fillMuted : 'rgb(24 24 27)'};"
                       onclick={(e) => {
                         toggleSegmentPreview(e.currentTarget as HTMLElement, segKey);
                       }}
@@ -804,7 +820,10 @@
                           N/A
                         </div>
                       {/if}
-                      <div class="flex justify-between text-[10px] text-zinc-400 px-1 py-0.5 bg-zinc-800/80">
+                      <div
+                        class="flex justify-between text-[10px] px-1 py-0.5 transition-colors"
+                        style="background-color: {palette.fillMuted}; color: {palette.text};"
+                      >
                         <span>{seg[0]}–{seg[1]}</span>
                         <span>{formatTimecode(parseTimecode(seg[1]) - parseTimecode(seg[0]))}</span>
                       </div>
