@@ -2,6 +2,195 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { buildYouTubeEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
 
+  type ZoomRange = {
+    start: number;
+    end: number;
+  };
+
+  type EdgeDrag = { segIndex: number; edge: "start" | "end" };
+
+  function clampRange(start: number, end: number): ZoomRange {
+    return {
+      start: Math.max(0, start),
+      end: Math.min(1, end),
+    };
+  }
+
+  function formatTickLabel(seconds: number): string {
+    seconds = Math.max(0, seconds);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const frac = seconds - Math.floor(seconds);
+
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    }
+
+    if (frac > 0.001) {
+      const ms = Math.round(frac * 1000);
+      return `${m}:${s.toString().padStart(2, "0")}.${ms.toString().padStart(3, "0")}`;
+    }
+
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
+  function timeToRatio(duration: number, time: number): number {
+    return duration > 0 ? time / duration : 0;
+  }
+
+  function timeToZoomedRatio(
+    duration: number,
+    zoomStart: number,
+    zoomEnd: number,
+    time: number,
+  ): number {
+    if (duration <= 0) return 0;
+
+    const zoomRange = zoomEnd - zoomStart;
+    if (zoomRange <= 0) return 0;
+
+    return (time / duration - zoomStart) / zoomRange;
+  }
+
+  function zoomedRatioToTime(
+    duration: number,
+    zoomStart: number,
+    zoomEnd: number,
+    ratio: number,
+  ): number {
+    return (zoomStart + ratio * (zoomEnd - zoomStart)) * duration;
+  }
+
+  function zoomInRange(zoomStart: number, zoomEnd: number): ZoomRange {
+    const zoomRange = zoomEnd - zoomStart;
+    const shrink = zoomRange * 0.25;
+    const center = (zoomStart + zoomEnd) / 2;
+    return clampRange(center - shrink, center + shrink);
+  }
+
+  function zoomOutRange(zoomStart: number, zoomEnd: number): ZoomRange {
+    const zoomRange = zoomEnd - zoomStart;
+    const expand = zoomRange * 0.5;
+    return clampRange(zoomStart - expand, zoomEnd + expand);
+  }
+
+  function panZoomRange(
+    panAnchor: number,
+    mouseRatio: number,
+    panZoomStart: number,
+    panZoomEnd: number,
+  ): ZoomRange {
+    const zoomRange = panZoomEnd - panZoomStart;
+    const delta = (mouseRatio - panAnchor) * zoomRange;
+
+    let start = panZoomStart - delta;
+    let end = panZoomEnd - delta;
+
+    if (start < 0) {
+      end -= start;
+      start = 0;
+    }
+    if (end > 1) {
+      start -= end - 1;
+      end = 1;
+    }
+
+    return clampRange(start, end);
+  }
+
+  function zoomRangeFromWheel(
+    zoomStart: number,
+    zoomEnd: number,
+    mouseRatio: number,
+    deltaY: number,
+  ): ZoomRange {
+    const mouseNorm = zoomStart + mouseRatio * (zoomEnd - zoomStart);
+    const factor = deltaY > 0 ? 1.15 : 1 / 1.15;
+    const range = zoomEnd - zoomStart;
+    const nextRange = Math.min(1, Math.max(0.001, range * factor));
+
+    let start = mouseNorm - (mouseNorm - zoomStart) * (nextRange / range);
+    let end = mouseNorm + (zoomEnd - mouseNorm) * (nextRange / range);
+
+    if (start < 0) {
+      end -= start;
+      start = 0;
+    }
+    if (end > 1) {
+      start -= end - 1;
+      end = 1;
+    }
+
+    return clampRange(start, end);
+  }
+
+  function centerZoomRange(zoomStart: number, zoomEnd: number, center: number): ZoomRange {
+    const range = zoomEnd - zoomStart;
+
+    let start = center - range / 2;
+    let end = center + range / 2;
+
+    if (start < 0) {
+      end -= start;
+      start = 0;
+    }
+    if (end > 1) {
+      start -= end - 1;
+      end = 1;
+    }
+
+    return clampRange(start, end);
+  }
+
+  function splitSegmentsAtTime(
+    segments: string[][],
+    parsedSegments: { start: number; end: number }[],
+    currentTime: number,
+  ): string[][] | null {
+    for (let i = 0; i < parsedSegments.length; i++) {
+      const segment = parsedSegments[i];
+      if (currentTime > segment.start + 0.5 && currentTime < segment.end - 0.5) {
+        const updated = [...segments];
+        updated.splice(
+          i,
+          1,
+          [segments[i][0], formatTimecode(currentTime)],
+          [formatTimecode(currentTime), segments[i][1]],
+        );
+        return updated;
+      }
+    }
+
+    return null;
+  }
+
+  function addSegment(segments: string[][], start: number, end: number): string[][] {
+    return [...segments, [formatTimecode(start), formatTimecode(end)]];
+  }
+
+  function removeSegmentAt(segments: string[][], index: number): string[][] {
+    return segments.filter((_, segmentIndex) => segmentIndex !== index);
+  }
+
+  function updateSegmentEdge(
+    segments: string[][],
+    edgeDrag: EdgeDrag,
+    time: number,
+  ): string[][] {
+    return segments.map((segment, index) => {
+      if (index !== edgeDrag.segIndex) {
+        return segment;
+      }
+
+      if (edgeDrag.edge === "start") {
+        return [formatTimecode(time), segment[1]];
+      }
+
+      return [segment[0], formatTimecode(time)];
+    });
+  }
+
   let {
     filePath,
     youtubeUrl = "",
@@ -22,12 +211,58 @@
   let playing = $state(false);
   let timelineEl: HTMLDivElement | undefined = $state();
   let videoError = $state("");
+  let playbackRate = $state(1);
 
   let markIn: number | null = $state(null);
   let dragging = $state(false);
   let dragStart = $state(0);
   let dragEnd = $state(0);
   let hoveredSegment = $state(-1);
+
+  let zoomStart = $state(0);
+  let zoomEnd = $state(1);
+  let isPanning = $state(false);
+  let panAnchor = $state(0);
+  let panZoomStart = $state(0);
+  let panZoomEnd = $state(0);
+
+  let edgeDrag: EdgeDrag | null = $state(null);
+
+  let overviewEl: HTMLDivElement | undefined = $state();
+  let overviewDragging = $state(false);
+
+  let timelineTicks = $derived.by(() => {
+    if (duration <= 0) return [];
+    const visibleDuration = (zoomEnd - zoomStart) * duration;
+    if (visibleDuration <= 0) return [];
+
+    const niceIntervals = [
+      0.1, 0.2, 0.5,
+      1, 2, 5, 10, 15, 30,
+      60, 120, 300, 600, 900, 1800, 3600,
+    ];
+    const minPixelGap = 50;
+    const approximatePixelWidth = timelineEl?.getBoundingClientRect().width ?? 600;
+    const pixelsPerSecond = approximatePixelWidth / visibleDuration;
+    let interval = niceIntervals[niceIntervals.length - 1];
+    for (const ni of niceIntervals) {
+      if (ni * pixelsPerSecond >= minPixelGap) {
+        interval = ni;
+        break;
+      }
+    }
+
+    const startTime = zoomStart * duration;
+    const endTime = zoomEnd * duration;
+    const firstTick = Math.ceil(startTime / interval) * interval;
+    const ticks: { time: number; label: string; major: boolean }[] = [];
+    for (let t = firstTick; t <= endTime; t += interval) {
+      const rounded = Math.round(t * 1000) / 1000;
+      const major = interval >= 1 ? Math.abs(rounded % (interval * (interval >= 60 ? 1 : 5 < interval ? 2 : 5))) < 0.001 : false;
+      ticks.push({ time: rounded, label: formatTickLabel(rounded), major });
+    }
+    return ticks;
+  });
 
   let parsedSegments = $derived(
     segments
@@ -54,12 +289,17 @@
   let videoSrc = $derived(filePath ? convertFileSrc(filePath) : "");
   let youtubeEmbedSrc = $derived(youtubeUrl ? buildYouTubeEmbedUrl(youtubeUrl) : "");
 
-  function timeToRatio(t: number): number {
-    return duration > 0 ? t / duration : 0;
+  function zoomToFull() {
+    zoomStart = 0;
+    zoomEnd = 1;
   }
 
-  function ratioToTime(r: number): number {
-    return r * duration;
+  function zoomIn() {
+    ({ start: zoomStart, end: zoomEnd } = zoomInRange(zoomStart, zoomEnd));
+  }
+
+  function zoomOut() {
+    ({ start: zoomStart, end: zoomEnd } = zoomOutRange(zoomStart, zoomEnd));
   }
 
   function tick() {
@@ -80,15 +320,9 @@
 
   function splitAtPlayhead() {
     if (!videoEl) return;
-    const t = videoEl.currentTime;
-    for (let i = 0; i < parsedSegments.length; i++) {
-      const seg = parsedSegments[i];
-      if (t > seg.start + 0.5 && t < seg.end - 0.5) {
-        const updated = [...segments];
-        updated.splice(i, 1, [segments[i][0], formatTimecode(t)], [formatTimecode(t), segments[i][1]]);
-        onSegmentsChange(updated);
-        return;
-      }
+    const updated = splitSegmentsAtTime(segments, parsedSegments, videoEl.currentTime);
+    if (updated) {
+      onSegmentsChange(updated);
     }
   }
 
@@ -107,15 +341,12 @@
     if (!videoEl || markIn === null) return;
     const out = videoEl.currentTime;
     if (out <= markIn) return;
-    const newSeg: string[] = [formatTimecode(markIn), formatTimecode(out)];
-    const updated = [...segments, newSeg];
-    onSegmentsChange(updated);
+    onSegmentsChange(addSegment(segments, markIn, out));
     markIn = null;
   }
 
   function removeSegment(index: number) {
-    const updated = segments.filter((_, i) => i !== index);
-    onSegmentsChange(updated);
+    onSegmentsChange(removeSegmentAt(segments, index));
   }
 
   function timelineMousePos(e: MouseEvent): number {
@@ -126,19 +357,50 @@
 
   function handleTimelineDown(e: MouseEvent) {
     if (!duration) return;
+    if (e.button === 1) {
+      e.preventDefault();
+      isPanning = true;
+      panAnchor = timelineMousePos(e);
+      panZoomStart = zoomStart;
+      panZoomEnd = zoomEnd;
+      return;
+    }
+    if (edgeDrag) {
+      dragging = false;
+      return;
+    }
     dragging = true;
     const ratio = timelineMousePos(e);
-    dragStart = ratioToTime(ratio);
-    dragEnd = ratioToTime(ratio);
+    dragStart = zoomedRatioToTime(duration, zoomStart, zoomEnd, ratio);
+    dragEnd = zoomedRatioToTime(duration, zoomStart, zoomEnd, ratio);
   }
 
   function handleTimelineMove(e: MouseEvent) {
+    if (isPanning) {
+      ({ start: zoomStart, end: zoomEnd } = panZoomRange(
+        panAnchor,
+        timelineMousePos(e),
+        panZoomStart,
+        panZoomEnd,
+      ));
+      return;
+    }
+    if (edgeDrag) {
+      const time = zoomedRatioToTime(duration, zoomStart, zoomEnd, timelineMousePos(e));
+      onSegmentsChange(updateSegmentEdge(segments, edgeDrag, time));
+      return;
+    }
     if (!dragging) return;
     const ratio = timelineMousePos(e);
-    dragEnd = ratioToTime(ratio);
+    dragEnd = zoomedRatioToTime(duration, zoomStart, zoomEnd, ratio);
   }
 
   function handleTimelineUp() {
+    isPanning = false;
+    if (edgeDrag) {
+      edgeDrag = null;
+      return;
+    }
     if (!dragging) return;
     dragging = false;
     const s = Math.min(dragStart, dragEnd);
@@ -147,10 +409,47 @@
       seekTo(s);
       return;
     }
-    const newSeg: string[] = [formatTimecode(s), formatTimecode(e)];
-    const updated = [...segments, newSeg];
-    onSegmentsChange(updated);
+    onSegmentsChange(addSegment(segments, s, e));
   }
+
+  function handleTimelineWheel(e: WheelEvent) {
+    if (!duration) return;
+    e.preventDefault();
+    ({ start: zoomStart, end: zoomEnd } = zoomRangeFromWheel(
+      zoomStart,
+      zoomEnd,
+      timelineMousePos(e),
+      e.deltaY,
+    ));
+  }
+
+  function overviewMousePos(e: MouseEvent): number {
+    if (!overviewEl) return 0;
+    const rect = overviewEl.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  }
+
+  function handleOverviewDown(e: MouseEvent) {
+    if (!duration) return;
+    e.preventDefault();
+    ({ start: zoomStart, end: zoomEnd } = centerZoomRange(zoomStart, zoomEnd, overviewMousePos(e)));
+    overviewDragging = true;
+  }
+
+  function handleOverviewMove(e: MouseEvent) {
+    if (!overviewDragging) return;
+    ({ start: zoomStart, end: zoomEnd } = centerZoomRange(zoomStart, zoomEnd, overviewMousePos(e)));
+  }
+
+  function handleOverviewUp() {
+    overviewDragging = false;
+  }
+
+  $effect(() => {
+    const el = videoEl;
+    if (!el) return;
+    el.playbackRate = playbackRate;
+  });
 
   $effect(() => {
     const el = videoEl;
@@ -243,6 +542,16 @@
       <span class="text-zinc-400 tabular-nums">
         {formatTimecode(currentTime)} / {formatTimecode(duration)}
       </span>
+      <div class="flex items-center gap-0.5 ml-auto">
+        {#each [1, 1.25, 1.5, 2] as rate}
+          <button
+            class="px-1.5 py-1 text-xs {playbackRate === rate ? 'bg-zinc-500 text-white' : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'}"
+            onclick={() => playbackRate = rate}
+          >
+            {rate}x
+          </button>
+        {/each}
+      </div>
     </div>
 
     <div
@@ -275,11 +584,20 @@
     </div>
 
     <div class="space-y-1">
-      <div class="text-xs text-zinc-500">Timeline — click segment to seek, drag empty area to create</div>
+      <div class="flex items-center justify-between gap-2 text-xs">
+        <span class="text-zinc-500">Timeline — click segment to seek, drag empty area to create, scroll to zoom</span>
+        <div class="flex items-center gap-1">
+          <button class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600" onclick={zoomOut}>-</button>
+          <button class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600" onclick={zoomToFull}>Fit</button>
+          <button class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600" onclick={zoomIn}>+</button>
+          <span class="text-zinc-600">{Math.round((zoomEnd - zoomStart) * 100)}%</span>
+        </div>
+      </div>
 
       <div
+        id="video-timeline"
         bind:this={timelineEl}
-        class="relative h-8 bg-zinc-800 border border-zinc-700 select-none cursor-crosshair"
+        class="relative h-12 bg-zinc-800 border border-zinc-700 select-none cursor-crosshair overflow-hidden"
         role="slider"
         aria-label="Video timeline"
         aria-valuenow={Math.round(currentTime)}
@@ -289,36 +607,98 @@
         onmousedown={handleTimelineDown}
         onmousemove={handleTimelineMove}
         onmouseup={handleTimelineUp}
-        onmouseleave={() => { if (dragging) handleTimelineUp(); }}
+        onmouseleave={() => { if (dragging) handleTimelineUp(); if (isPanning) isPanning = false; if (edgeDrag) edgeDrag = null; }}
+        onwheel={handleTimelineWheel}
       >
+        {#each timelineTicks as tick}
+          <div
+            class="absolute bottom-0 w-px bg-zinc-600 pointer-events-none"
+            style="left: {timeToZoomedRatio(duration, zoomStart, zoomEnd, tick.time) * 100}%; height: {tick.major ? '40%' : '20%'};"
+          ></div>
+          <span
+            class="absolute bottom-0 text-[9px] text-zinc-500 pointer-events-none tabular-nums"
+            style="left: {timeToZoomedRatio(duration, zoomStart, zoomEnd, tick.time) * 100}%; transform: translateX(-50%); padding-bottom: 2px;"
+          >
+            {tick.label}
+          </span>
+        {/each}
+
         {#each parsedSegments as seg, i}
-          <button
-            type="button"
-            class="absolute top-0 h-full bg-green-700/60 {isSegmentHighlighted(i) ? '!bg-green-500/80' : 'hover:bg-green-600/80'}"
-            style="left: {timeToRatio(seg.start) * 100}%; width: {(timeToRatio(seg.end) - timeToRatio(seg.start)) * 100}%;"
-            aria-label={`Seek to segment ${i + 1}: ${segments[i][0]} to ${segments[i][1]}`}
+          <div
+            class="absolute top-0 h-[60%] bg-green-700/60 {isSegmentHighlighted(i) ? '!bg-green-500/80' : 'hover:bg-green-600/80'}"
+            style="left: {timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.start) * 100}%; width: {(timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.end) - timeToZoomedRatio(duration, zoomStart, zoomEnd, seg.start)) * 100}%;"
+            role="button"
+            tabindex="-1"
+            aria-label={`Segment ${i + 1}: ${segments[i][0]} to ${segments[i][1]}`}
             onmouseenter={() => hoveredSegment = i}
             onmouseleave={() => hoveredSegment = -1}
-            onclick={(e) => { e.stopPropagation(); seekTo(ratioToTime(timelineMousePos(e as unknown as MouseEvent))); }}
-          ></button>
+            onclick={(e) => { e.stopPropagation(); seekTo(zoomedRatioToTime(duration, zoomStart, zoomEnd, timelineMousePos(e as unknown as MouseEvent))); }}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); seekTo((seg.start + seg.end) / 2); } }}
+          >
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="absolute left-0 top-0 w-1.5 h-full cursor-ew-resize {hoveredSegment === i ? 'hover:bg-white/30' : ''}"
+              onmousedown={(e) => { e.stopPropagation(); edgeDrag = { segIndex: i, edge: "start" }; }}
+            ></div>
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="absolute right-0 top-0 w-1.5 h-full cursor-ew-resize {hoveredSegment === i ? 'hover:bg-white/30' : ''}"
+              onmousedown={(e) => { e.stopPropagation(); edgeDrag = { segIndex: i, edge: "end" }; }}
+            ></div>
+          </div>
         {/each}
 
         {#if dragging && duration > 0}
           {@const ds = Math.min(dragStart, dragEnd)}
           {@const de = Math.max(dragStart, dragEnd)}
           <div
-            class="absolute top-0 h-full bg-yellow-500/40 border border-yellow-400/60"
-            style="left: {timeToRatio(ds) * 100}%; width: {(timeToRatio(de) - timeToRatio(ds)) * 100}%;"
+            class="absolute top-0 h-[60%] bg-yellow-500/40 border border-yellow-400/60"
+            style="left: {timeToZoomedRatio(duration, zoomStart, zoomEnd, ds) * 100}%; width: {(timeToZoomedRatio(duration, zoomStart, zoomEnd, de) - timeToZoomedRatio(duration, zoomStart, zoomEnd, ds)) * 100}%;"
           ></div>
         {/if}
 
         {#if duration > 0}
           <div
-            class="absolute top-0 h-full w-0.5 bg-white pointer-events-none"
-            style="left: {timeToRatio(currentTime) * 100}%;"
+            class="absolute top-0 h-[60%] w-0.5 bg-white pointer-events-none"
+            style="left: {timeToZoomedRatio(duration, zoomStart, zoomEnd, currentTime) * 100}%;"
           ></div>
         {/if}
       </div>
+
+      {#if zoomEnd - zoomStart < 0.99}
+        <!-- svelte-ignore a11y_interactive_supports_focus -->
+        <div
+          bind:this={overviewEl}
+          class="relative h-3 bg-zinc-900 border border-zinc-700 select-none cursor-pointer"
+          role="scrollbar"
+          aria-controls="video-timeline"
+          aria-valuenow={Math.round(zoomStart * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Timeline scroll overview"
+          onmousedown={handleOverviewDown}
+          onmousemove={handleOverviewMove}
+          onmouseup={handleOverviewUp}
+          onmouseleave={handleOverviewUp}
+        >
+          {#each parsedSegments as seg}
+            <div
+              class="absolute top-0 h-full bg-green-800/40 pointer-events-none"
+              style="left: {timeToRatio(duration, seg.start) * 100}%; width: {(timeToRatio(duration, seg.end) - timeToRatio(duration, seg.start)) * 100}%;"
+            ></div>
+          {/each}
+          <div
+            class="absolute top-0 h-full bg-zinc-600/60 border-x border-zinc-500"
+            style="left: {zoomStart * 100}%; width: {(zoomEnd - zoomStart) * 100}%;"
+          ></div>
+          {#if duration > 0}
+            <div
+              class="absolute top-0 h-full w-px bg-white/70 pointer-events-none"
+              style="left: {timeToRatio(duration, currentTime) * 100}%;"
+            ></div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     {#if invalidSegmentCount > 0}

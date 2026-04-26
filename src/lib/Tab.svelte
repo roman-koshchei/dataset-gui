@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { history, pushToHistory, removeFromHistory } from "./history.svelte";
+  import { history, pushToHistory, removeFromHistory, videoHistory, pushToVideoHistory, removeFromVideoHistory } from "./history.svelte";
   import DatasetGrid from "./DatasetGrid.svelte";
   import VideoManagement from "./VideoManagement.svelte";
   import { emptyVideoCollection } from "./video-collection";
@@ -100,6 +100,7 @@
       collection.collection = videoDataPath.replace(/[/\\]data\.json$/, "").split(/[/\\]/).pop() || "";
       await writeTextFile(videoDataPath, JSON.stringify(collection, null, 2) + "\n");
       await saveVideoPath();
+      await pushToVideoHistory(videoDataPath, videosDir);
       viewMode = "videos";
     } catch (err) {
       videoError = err instanceof Error ? err.message : String(err);
@@ -113,6 +114,7 @@
     }
     videoError = "";
     await saveVideoPath();
+    await pushToVideoHistory(videoDataPath, videosDir);
     viewMode = "videos";
   }
 </script>
@@ -121,9 +123,9 @@
   {#if viewMode === "start"}
     <div class="h-full overflow-y-auto grid grid-cols-2 gap-8 p-4">
       <div class="space-y-6">
-        <h2 class="text-xl">Add new dataset</h2>
+        <h2 class="text-xl">Dataset</h2>
 
-        <form onsubmit={selectDataset}>
+        <form onsubmit={selectDataset} class="space-y-2">
            <label class="space-y-2 block">
              Images directory
              <input
@@ -135,7 +137,7 @@
             />
           </label>
 
-          <label class="mt-2 space-y-2 block">
+          <label class="space-y-2 block">
             Labels directory
             <input
               type="text"
@@ -147,19 +149,65 @@
           </label>
 
          {#if datasetError}
-           <p class="mt-4 text-red-500">{datasetError}</p>
+           <p class="text-red-500">{datasetError}</p>
           {/if}
 
           <button
-            class="mt-8 w-full bg-green-600 py-2 px-4 hover:bg-green-700 transition-colors"
+            class="w-full bg-green-600 py-2 px-4 hover:bg-green-700 transition-colors"
             type="submit"
           >
             Select
           </button>
         </form>
 
-        <div class="border-t border-zinc-700 pt-6 space-y-3">
-          <h3 class="text-lg">Video Management</h3>
+        <div class="border-t border-zinc-700 pt-4 space-y-3">
+          <h3 class="text-lg">History</h3>
+          <div class="space-y-3">
+            {#each history.items as histItem}
+              <div
+                class="grid grid-cols-[1fr_auto] items-stretch border border-zinc-700"
+              >
+                <button
+                  onclick={async () => {
+                    datasetError = "";
+                    imagesDir = histItem.imagesDir;
+                    labelsDir = histItem.labelsDir;
+                    await selectDataset();
+                  }}
+                  class="px-3 py-2 hover:bg-zinc-800 text-left"
+                >
+                  <p>{histItem.imagesDir}</p>
+                  <p>{histItem.labelsDir}</p>
+                </button>
+                <div
+                  class="border-l border-zinc-700 px-3 grid place-content-center"
+                >
+                  <button
+                    aria-label={`Delete from history: ${histItem.labelsDir}`}
+                    class="py-1 px-3 bg-red-600 hover:bg-red-700"
+                    onclick={async () => {
+                      try {
+                        await removeFromHistory(
+                          histItem.imagesDir,
+                          histItem.labelsDir
+                        );
+                      } catch (err) {
+                        console.error("Failed to remove from history:", err);
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-6">
+        <h2 class="text-xl">Video Management</h2>
+        <div class="space-y-2">
           <label class="space-y-2 block">
             data.json path
             <input
@@ -197,50 +245,44 @@
             </button>
           </div>
         </div>
-      </div>
 
-      <div class="space-y-6">
-        <h2 class="text-xl">Select from history</h2>
-
-        <div class="space-y-3">
-          {#each history.items as histItem}
-            <div
-              class="grid grid-cols-[1fr_auto] items-stretch border border-zinc-700"
-            >
-              <button
-                onclick={async () => {
-                  datasetError = "";
-                  imagesDir = histItem.imagesDir;
-                  labelsDir = histItem.labelsDir;
-                  await selectDataset();
-                }}
-                class="px-3 py-2 hover:bg-zinc-800 text-left"
-              >
-                <p>{histItem.imagesDir}</p>
-                <p>{histItem.labelsDir}</p>
-              </button>
-              <div
-                class="border-l border-zinc-700 px-3 grid place-content-center"
-              >
+        <div class="border-t border-zinc-700 pt-4 space-y-3">
+          <h3 class="text-lg">History</h3>
+          <div class="space-y-3">
+            {#each videoHistory.items as vHistItem}
+              <div class="grid grid-cols-[1fr_auto] items-stretch border border-zinc-700">
                 <button
-                  aria-label={`Delete from history: ${histItem.labelsDir}`}
-                  class="py-1 px-3 bg-red-600 hover:bg-red-700"
                   onclick={async () => {
-                    try {
-                      await removeFromHistory(
-                        histItem.imagesDir,
-                        histItem.labelsDir
-                      );
-                    } catch (err) {
-                      console.error("Failed to remove from history:", err);
-                    }
+                    videoError = "";
+                    videoDataPath = vHistItem.dataPath;
+                    videosDir = vHistItem.videosDir;
+                    await openVideoManagement();
                   }}
+                  class="px-3 py-2 hover:bg-zinc-800 text-left"
                 >
-                  Delete
+                  <p>{vHistItem.dataPath}</p>
+                  {#if vHistItem.videosDir}
+                    <p class="text-zinc-400 text-sm">{vHistItem.videosDir}</p>
+                  {/if}
                 </button>
+                <div class="border-l border-zinc-700 px-3 grid place-content-center">
+                  <button
+                    aria-label="Delete from video history"
+                    class="py-1 px-3 bg-red-600 hover:bg-red-700"
+                    onclick={async () => {
+                      try {
+                        await removeFromVideoHistory(vHistItem.dataPath);
+                      } catch (err) {
+                        console.error("Failed to remove from video history:", err);
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
-            </div>
-          {/each}
+            {/each}
+          </div>
         </div>
       </div>
     </div>

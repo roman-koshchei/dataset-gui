@@ -419,6 +419,49 @@ fn list_subdirs(dir: String) -> Result<Vec<String>, String> {
     Ok(entries)
 }
 
+#[tauri::command]
+fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                &format!("array:string:file://{}", path),
+                "string:",
+            ])
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("xdg-open")
+                    .arg(p.parent().unwrap_or(p))
+                    .spawn()
+            })
+            .map_err(|e| format!("Failed to open file manager: {}", e))?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let cli_args = parse_cli_args();
@@ -442,6 +485,7 @@ pub fn run() {
             unwatch_directories,
             list_video_files,
             list_subdirs,
+            reveal_in_file_manager,
             get_cli_args,
         ])
         .run(tauri::generate_context!())
