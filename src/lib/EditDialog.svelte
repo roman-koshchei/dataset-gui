@@ -50,7 +50,9 @@
     if (!dialog) return;
 
     if (item != null) {
-      dialog.showModal();
+      if (!dialog.open) {
+        dialog.showModal();
+      }
     } else {
       dialog.close();
     }

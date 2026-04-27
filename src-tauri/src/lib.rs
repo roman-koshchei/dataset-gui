@@ -1,4 +1,5 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -19,7 +20,7 @@ fn parse_cli_args() -> CliArgs {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--images-dir" | "-i" => {
+            "--images-dir" | "--dataset-images-dir" | "-i" => {
                 if i + 1 < args.len() {
                     result.images_dir = Some(args[i + 1].clone());
                     i += 2;
@@ -27,7 +28,7 @@ fn parse_cli_args() -> CliArgs {
                     i += 1;
                 }
             }
-            "--labels-dir" | "-l" => {
+            "--labels-dir" | "--dataset-labels-dir" | "-l" => {
                 if i + 1 < args.len() {
                     result.labels_dir = Some(args[i + 1].clone());
                     i += 2;
@@ -61,11 +62,33 @@ struct DatasetLabel {
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct DatasetDir {
+    images_dir: String,
+    labels_dir: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct DatasetItem {
     name: String,
     image_src: String,
     labels: Vec<DatasetLabel>,
     has_label_file: bool,
+    images_dir: String,
+    labels_dir: String,
+}
+
+#[derive(Clone)]
+struct PreparedDatasetEntry {
+    name: String,
+    base_name: String,
+    image_src: String,
+    images_dir: String,
+    labels_dir: String,
+}
+
+struct DatasetLoadState {
+    loads: HashMap<String, Vec<PreparedDatasetEntry>>,
 }
 
 struct WatcherEntry {
@@ -77,17 +100,30 @@ struct WatchState {
     watchers: HashMap<String, WatcherEntry>,
 }
 
-fn parse_yolo_line(line: &str) -> Option<DatasetLabel> {
+fn parse_yolo_line(line: &str) -> Result<DatasetLabel, String> {
     let parts: Vec<&str> = line.trim().split_whitespace().collect();
     if parts.len() < 5 {
-        return None;
+        return Err(format!(
+            "Invalid format: expected 5 values, got {}",
+            parts.len()
+        ));
     }
-    let class_id = parts[0].parse::<u32>().ok()?;
-    let x_center = parts[1].parse::<f64>().ok()?;
-    let y_center = parts[2].parse::<f64>().ok()?;
-    let width = parts[3].parse::<f64>().ok()?;
-    let height = parts[4].parse::<f64>().ok()?;
-    Some(DatasetLabel {
+    let class_id = parts[0]
+        .parse::<u32>()
+        .map_err(|_| format!("Invalid classId: \"{}\" is not a number", parts[0]))?;
+    let x_center = parts[1]
+        .parse::<f64>()
+        .map_err(|_| format!("Invalid xCenter: \"{}\" is not a number", parts[1]))?;
+    let y_center = parts[2]
+        .parse::<f64>()
+        .map_err(|_| format!("Invalid yCenter: \"{}\" is not a number", parts[2]))?;
+    let width = parts[3]
+        .parse::<f64>()
+        .map_err(|_| format!("Invalid width: \"{}\" is not a number", parts[3]))?;
+    let height = parts[4]
+        .parse::<f64>()
+        .map_err(|_| format!("Invalid height: \"{}\" is not a number", parts[4]))?;
+    Ok(DatasetLabel {
         class_id,
         left: x_center - width / 2.0,
         top: y_center - height / 2.0,
@@ -96,26 +132,32 @@ fn parse_yolo_line(line: &str) -> Option<DatasetLabel> {
     })
 }
 
-fn load_labels_for_name(labels_dir: &Path, name: &str) -> (Vec<DatasetLabel>, bool) {
+fn load_labels_for_name(
+    labels_dir: &Path,
+    name: &str,
+) -> Result<(Vec<DatasetLabel>, bool), String> {
     let label_path = labels_dir.join(format!("{}.txt", name));
     if !label_path.exists() {
-        return (Vec::new(), false);
+        return Ok((Vec::new(), false));
     }
-    let labels = match fs::read_to_string(&label_path) {
-        Ok(content) => content
-            .lines()
-            .filter_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    parse_yolo_line(trimmed)
-                }
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    (labels, true)
+    let content = fs::read_to_string(&label_path)
+        .map_err(|e| format!("Failed to read label file {}: {}", label_path.display(), e))?;
+    let mut labels = Vec::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        labels.push(parse_yolo_line(trimmed).map_err(|reason| {
+            format!(
+                "Malformed label in file {} line {}: {}",
+                label_path.display(),
+                line_index + 1,
+                reason
+            )
+        })?);
+    }
+    Ok((labels, true))
 }
 
 fn convert_to_asset_src(file_path: &str) -> String {
@@ -134,6 +176,168 @@ fn get_sorted_image_files(images_dir: &Path) -> Result<Vec<std::fs::DirEntry>, S
         .collect();
     entries.sort_by_key(|e| e.file_name());
     Ok(entries)
+}
+
+fn video_name_prefix(images_dir: &str) -> Option<String> {
+    let parts: Vec<&str> = images_dir
+        .split(|ch| ch == '/' || ch == '\\')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let videos_index = parts.iter().rposition(|part| *part == "videos")?;
+    if videos_index + 1 >= parts.len().saturating_sub(1) {
+        return None;
+    }
+    Some(parts[videos_index + 1..parts.len() - 1].join("/"))
+}
+
+fn dataset_item_from_entry(
+    entry: &std::fs::DirEntry,
+    images_dir: &str,
+    labels_dir: &str,
+    name_prefix: Option<&str>,
+) -> Result<DatasetItem, String> {
+    let file_name = entry.file_name();
+    let file_name_str = file_name.to_string_lossy().to_string();
+    let name = file_name_str
+        .rsplit_once('.')
+        .map(|(n, _)| n.to_string())
+        .unwrap_or(file_name_str.clone());
+    let full_name = name_prefix
+        .map(|prefix| format!("{}/{}", prefix, name))
+        .unwrap_or_else(|| name.clone());
+
+    let (labels, has_label_file) = load_labels_for_name(Path::new(labels_dir), &name)?;
+    let full_path = entry.path().to_string_lossy().to_string();
+    let image_src = convert_to_asset_src(&full_path);
+
+    Ok(DatasetItem {
+        name: full_name,
+        image_src,
+        labels,
+        has_label_file,
+        images_dir: images_dir.to_string(),
+        labels_dir: labels_dir.to_string(),
+    })
+}
+
+fn prepared_entry_from_entry(
+    entry: &std::fs::DirEntry,
+    images_dir: &str,
+    labels_dir: &str,
+    name_prefix: Option<&str>,
+) -> PreparedDatasetEntry {
+    let file_name = entry.file_name();
+    let file_name_str = file_name.to_string_lossy().to_string();
+    let base_name = file_name_str
+        .rsplit_once('.')
+        .map(|(n, _)| n.to_string())
+        .unwrap_or(file_name_str);
+    let name = name_prefix
+        .map(|prefix| format!("{}/{}", prefix, base_name))
+        .unwrap_or_else(|| base_name.clone());
+    let full_path = entry.path().to_string_lossy().to_string();
+
+    PreparedDatasetEntry {
+        name,
+        base_name,
+        image_src: convert_to_asset_src(&full_path),
+        images_dir: images_dir.to_string(),
+        labels_dir: labels_dir.to_string(),
+    }
+}
+
+fn dataset_item_from_prepared_entry(entry: &PreparedDatasetEntry) -> Result<DatasetItem, String> {
+    let (labels, has_label_file) =
+        load_labels_for_name(Path::new(&entry.labels_dir), &entry.base_name)?;
+
+    Ok(DatasetItem {
+        name: entry.name.clone(),
+        image_src: entry.image_src.clone(),
+        labels,
+        has_label_file,
+        images_dir: entry.images_dir.clone(),
+        labels_dir: entry.labels_dir.clone(),
+    })
+}
+
+fn validate_dataset_dir(dir: &DatasetDir) -> Result<(), String> {
+    let img_dir = Path::new(&dir.images_dir);
+    let lbl_dir = Path::new(&dir.labels_dir);
+
+    if !img_dir.exists() {
+        return Err(format!("Directory does not exist: {}", dir.images_dir));
+    }
+    if !lbl_dir.exists() {
+        return Err(format!("Directory does not exist: {}", dir.labels_dir));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn prepare_dataset_load(
+    state: State<'_, Mutex<DatasetLoadState>>,
+    load_id: String,
+    dirs: Vec<DatasetDir>,
+) -> Result<usize, String> {
+    let mut prepared_entries = Vec::new();
+
+    for dir in dirs {
+        validate_dataset_dir(&dir)?;
+        let entries = get_sorted_image_files(Path::new(&dir.images_dir))?;
+        let prefix = video_name_prefix(&dir.images_dir);
+
+        for entry in entries {
+            prepared_entries.push(prepared_entry_from_entry(
+                &entry,
+                &dir.images_dir,
+                &dir.labels_dir,
+                prefix.as_deref(),
+            ));
+        }
+    }
+
+    let total = prepared_entries.len();
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    state.loads.insert(load_id, prepared_entries);
+    Ok(total)
+}
+
+#[tauri::command]
+fn load_prepared_dataset_batch(
+    state: State<'_, Mutex<DatasetLoadState>>,
+    load_id: String,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<DatasetItem>, String> {
+    let batch_entries = {
+        let state = state.lock().map_err(|e| e.to_string())?;
+        let entries = state
+            .loads
+            .get(&load_id)
+            .ok_or_else(|| format!("Prepared dataset load not found: {}", load_id))?;
+
+        if offset >= entries.len() {
+            return Ok(Vec::new());
+        }
+
+        let end = std::cmp::min(offset + limit, entries.len());
+        entries[offset..end].to_vec()
+    };
+
+    batch_entries
+        .par_iter()
+        .map(dataset_item_from_prepared_entry)
+        .collect()
+}
+
+#[tauri::command]
+fn clear_prepared_dataset_load(
+    state: State<'_, Mutex<DatasetLoadState>>,
+    load_id: String,
+) -> Result<(), String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    state.loads.remove(&load_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -172,31 +376,11 @@ fn load_dataset_batch(
     let end = std::cmp::min(offset + limit, entries.len());
     let batch = &entries[offset..end];
 
-    let items: Vec<DatasetItem> = batch
+    let prefix = video_name_prefix(&images_dir);
+    batch
         .iter()
-        .map(|entry| {
-            let file_name = entry.file_name();
-            let file_name_str = file_name.to_string_lossy().to_string();
-            let name = file_name_str
-                .rsplit_once('.')
-                .map(|(n, _)| n.to_string())
-                .unwrap_or(file_name_str.clone());
-
-            let (labels, has_label_file) = load_labels_for_name(lbl_dir, &name);
-
-            let full_path = entry.path().to_string_lossy().to_string();
-            let image_src = convert_to_asset_src(&full_path);
-
-            DatasetItem {
-                name,
-                image_src,
-                labels,
-                has_label_file,
-            }
-        })
-        .collect();
-
-    Ok(items)
+        .map(|entry| dataset_item_from_entry(entry, &images_dir, &labels_dir, prefix.as_deref()))
+        .collect()
 }
 
 #[tauri::command]
@@ -207,7 +391,6 @@ fn load_single_item(
     cache_bust: bool,
 ) -> Result<Option<DatasetItem>, String> {
     let img_dir = Path::new(&images_dir);
-    let lbl_dir = Path::new(&labels_dir);
 
     let entries = get_sorted_image_files(img_dir)?;
     let entry = entries.iter().find(|e| {
@@ -224,7 +407,7 @@ fn load_single_item(
         None => return Ok(None),
     };
 
-    let (labels, has_label_file) = load_labels_for_name(lbl_dir, &name);
+    let (labels, has_label_file) = load_labels_for_name(Path::new(&labels_dir), &name)?;
     let full_path = entry.path().to_string_lossy().to_string();
     let mut image_src = convert_to_asset_src(&full_path);
 
@@ -241,6 +424,8 @@ fn load_single_item(
         image_src,
         labels,
         has_label_file,
+        images_dir,
+        labels_dir,
     }))
 }
 
@@ -466,6 +651,11 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn frontend_log(message: String) {
+    println!("{}", message);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let cli_args = parse_cli_args();
@@ -476,8 +666,14 @@ pub fn run() {
         .manage(Mutex::new(WatchState {
             watchers: HashMap::new(),
         }))
+        .manage(Mutex::new(DatasetLoadState {
+            loads: HashMap::new(),
+        }))
         .manage(cli_args)
         .invoke_handler(tauri::generate_handler![
+            prepare_dataset_load,
+            load_prepared_dataset_batch,
+            clear_prepared_dataset_load,
             get_dataset_count,
             load_dataset_batch,
             load_single_item,
@@ -491,6 +687,7 @@ pub fn run() {
             list_subdirs,
             reveal_in_file_manager,
             get_cli_args,
+            frontend_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

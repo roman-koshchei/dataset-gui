@@ -3,7 +3,7 @@
   import Tab from "$lib/Tab.svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import type { Dataset } from "$lib/dataset";
+  import { logPerformance, type Dataset } from "$lib/dataset";
 
   type TabData = {
     id: string;
@@ -42,10 +42,11 @@
     try {
       const cliArgs = await invoke<{ imagesDir?: string; labelsDir?: string }>("get_cli_args");
       if (cliArgs.imagesDir && cliArgs.labelsDir) {
+        logPerformance(`CLI dataset open requested: imagesDir=${cliArgs.imagesDir} labelsDir=${cliArgs.labelsDir}`);
         tabs[0] = {
           id: tabs[0].id,
           label: cliArgs.imagesDir.split(/[/\\]/).pop(),
-          initialState: { imagesDir: cliArgs.imagesDir, labelsDir: cliArgs.labelsDir },
+          initialState: { dirs: [{ imagesDir: cliArgs.imagesDir, labelsDir: cliArgs.labelsDir }] },
         };
       }
     } catch {}

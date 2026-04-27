@@ -33,8 +33,9 @@
     initialDatasetApplied = true;
     viewMode = "dataset";
     dataset = initialState;
-    if ("imagesDir" in initialState) {
-      void pushToHistory(initialState.imagesDir, initialState.labelsDir);
+    if (initialState.dirs.length === 1) {
+      const dir = initialState.dirs[0];
+      void pushToHistory(dir.imagesDir, dir.labelsDir);
     }
   });
 
@@ -76,7 +77,7 @@
 
     datasetError = "";
     try {
-      dataset = { imagesDir, labelsDir };
+      dataset = { dirs: [{ imagesDir, labelsDir }] };
       viewMode = "dataset";
       await pushToHistory(imagesDir, labelsDir);
     } catch (err) {

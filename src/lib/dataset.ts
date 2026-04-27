@@ -1,19 +1,30 @@
-import {
-  readDir,
-  writeTextFile,
-  exists,
-  readTextFileLines,
-  remove,
-} from "@tauri-apps/plugin-fs";
+import { writeTextFile, exists, remove } from "@tauri-apps/plugin-fs";
 import { path } from "@tauri-apps/api";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 
-export type SingleDataset = { imagesDir: string; labelsDir: string };
-export type MultiDataset = { dirs: { imagesDir: string; labelsDir: string }[] };
-export type Dataset = SingleDataset | MultiDataset;
+export type DatasetDir = { imagesDir: string; labelsDir: string };
+export type Dataset = { dirs: DatasetDir[] };
 
-export function datasetDirs(dataset: Dataset): { imagesDir: string; labelsDir: string }[] {
-  return "dirs" in dataset ? dataset.dirs : [{ imagesDir: dataset.imagesDir, labelsDir: dataset.labelsDir }];
+export type DatasetLoadProgress = {
+  loadId: string;
+  phase: string;
+  loaded: number;
+  total: number;
+  current?: string | null;
+};
+
+type LoadProgressCallback = (progress: DatasetLoadProgress) => void;
+
+const LOAD_BATCH_SIZE = 500;
+
+export function logPerformance(message: string) {
+  const formatted = `[dataset-gui perf] ${new Date().toISOString()} ${message}`;
+  console.log(formatted);
+  void invoke("frontend_log", { message: formatted }).catch(() => {});
+}
+
+export function datasetDirs(dataset: Dataset): DatasetDir[] {
+  return dataset.dirs;
 }
 
 export class DatasetLoadError extends Error {
@@ -56,44 +67,6 @@ export function normArea(label: DatasetLabel): number {
   return label.width * label.height;
 }
 
-function parseLabelFromYoloLine(line: string): DatasetLabel {
-  const parts = line.trim().split(/\s+/);
-  
-  if (parts.length < 5) {
-    throw new Error(`Invalid format: expected 5 values, got ${parts.length}`);
-  }
-
-  const classId = parseInt(parts[0], 10);
-  const xCenter = parseFloat(parts[1]);
-  const yCenter = parseFloat(parts[2]);
-  const width = parseFloat(parts[3]);
-  const height = parseFloat(parts[4]);
-
-  if (isNaN(classId)) {
-    throw new Error(`Invalid classId: "${parts[0]}" is not a number`);
-  }
-  if (isNaN(xCenter)) {
-    throw new Error(`Invalid xCenter: "${parts[1]}" is not a number`);
-  }
-  if (isNaN(yCenter)) {
-    throw new Error(`Invalid yCenter: "${parts[2]}" is not a number`);
-  }
-  if (isNaN(width)) {
-    throw new Error(`Invalid width: "${parts[3]}" is not a number`);
-  }
-  if (isNaN(height)) {
-    throw new Error(`Invalid height: "${parts[4]}" is not a number`);
-  }
-
-  return {
-    classId: classId,
-    left: xCenter - width / 2,
-    top: yCenter - height / 2,
-    width: width,
-    height: height,
-  };
-}
-
 export type DatasetItem = {
   name: string;
   imageSrc: string;
@@ -111,115 +84,64 @@ export function datasetLabelKey(label: DatasetLabel): string {
   return `${label.left},${label.top},${label.left + label.width},${label.top + label.height}`;
 }
 
-async function validateDirectories(dataset: Dataset): Promise<void> {
-  for (const { imagesDir, labelsDir } of datasetDirs(dataset)) {
-    const [imagesExist, labelsExist] = await Promise.all([
-      exists(imagesDir),
-      exists(labelsDir),
-    ]);
-
-    if (!imagesExist) {
-      throw new DirectoryNotFoundError(imagesDir);
-    }
-    if (!labelsExist) {
-      throw new DirectoryNotFoundError(labelsDir);
-    }
-
-    try {
-      await readDir(imagesDir);
-    } catch (err) {
-      throw new PermissionError("read", imagesDir);
-    }
-
-    try {
-      await readDir(labelsDir);
-    } catch (err) {
-      throw new PermissionError("read", labelsDir);
-    }
-  }
-}
-
-function removeExtension(filename: string) {
-  const lastDotIndex = filename.lastIndexOf(".");
-  if (lastDotIndex === -1) return filename;
-  return filename.slice(0, lastDotIndex);
-}
-
 function getExtension(filename: string): string {
   const lastDotIndex = filename.lastIndexOf(".");
   if (lastDotIndex === -1) return "";
   return filename.slice(lastDotIndex + 1);
 }
 
-async function loadItemsFromDir(
-  imagesDir: string,
-  labelsDir: string,
-  namePrefix?: string
-): Promise<DatasetItem[]> {
-  let imageFiles;
-  try {
-    imageFiles = await readDir(imagesDir);
-    imageFiles = imageFiles.filter((entry) => entry.isFile);
-  } catch (err) {
-    throw new DatasetLoadError(`Failed to read images directory: ${err}`);
-  }
-
-  const itemsPromises = imageFiles.map(
-    async (imageFileEntry): Promise<DatasetItem> => {
-      try {
-        const name = removeExtension(imageFileEntry.name);
-        const fullName = namePrefix ? `${namePrefix}/${name}` : name;
-        const labelName = `${name}.txt`;
-        const labelPath = await path.join(labelsDir, labelName);
-        const labels: DatasetLabel[] = [];
-        const labelFileExists = await exists(labelPath);
-        
-        if (labelFileExists) {
-          try {
-            const lines = await readTextFileLines(labelPath);
-            for await (const line of lines) {
-              if (line.trim()) {
-                labels.push(parseLabelFromYoloLine(line));
-              }
-            }
-          } catch (err) {
-            throw new MalformedLabelError(labelName, err instanceof Error ? err.message : String(err));
-          }
-        }
-        
-        return {
-          name: fullName,
-          imageSrc: convertFileSrc(
-            await path.join(imagesDir, imageFileEntry.name)
-          ),
-          labels,
-          hasLabelFile: labelFileExists,
-          imagesDir,
-          labelsDir,
-        };
-      } catch (err) {
-        if (err instanceof MalformedLabelError) {
-          throw err;
-        }
-        throw new DatasetLoadError(`Failed to load file ${imageFileEntry.name}: ${err}`);
-      }
-    }
-  );
-
-  return await Promise.all(itemsPromises);
-}
-
 export async function loadWholeDataset(
-  dataset: Dataset
+  dataset: Dataset,
+  loadId: string,
+  onProgress?: LoadProgressCallback
 ): Promise<DatasetItem[]> {
-  await validateDirectories(dataset);
+  let prepared = false;
+  try {
+    const startMs = performance.now();
 
-  const allItems: DatasetItem[] = [];
-  for (const { imagesDir, labelsDir } of datasetDirs(dataset)) {
-    const items = await loadItemsFromDir(imagesDir, labelsDir);
-    allItems.push(...items);
+    logPerformance(`Dataset load started: dirs=${dataset.dirs.length}`);
+    onProgress?.({ loadId, phase: "Scanning files", loaded: 0, total: dataset.dirs.length });
+
+    const total = await invoke<number>("prepare_dataset_load", { loadId, dirs: dataset.dirs });
+    prepared = true;
+    logPerformance(`Prepared dataset load: total=${total} elapsedMs=${Math.round(performance.now() - startMs)}`);
+
+    const items: DatasetItem[] = [];
+    let loaded = 0;
+    let batchIndex = 0;
+    onProgress?.({ loadId, phase: "Loading labels", loaded, total });
+
+    for (let offset = 0; offset < total; offset += LOAD_BATCH_SIZE) {
+      const batch = await invoke<DatasetItem[]>("load_prepared_dataset_batch", {
+        loadId,
+        offset,
+        limit: Math.min(LOAD_BATCH_SIZE, total - offset),
+      });
+
+      items.push(...batch);
+      loaded += batch.length;
+      batchIndex += 1;
+      logPerformance(`Loaded metadata batch: batch=${batchIndex} loaded=${loaded}/${total} batchItems=${batch.length}`);
+      onProgress?.({
+        loadId,
+        phase: "Loading labels",
+        loaded,
+        total,
+      });
+
+      if (batch.length === 0) break;
+    }
+
+    onProgress?.({ loadId, phase: "Complete", loaded: items.length, total: items.length });
+    logPerformance(`Dataset metadata loaded: items=${items.length} elapsedMs=${Math.round(performance.now() - startMs)}`);
+    return items;
+  } catch (err) {
+    throw new DatasetLoadError(err instanceof Error ? err.message : String(err));
+  } finally {
+    if (prepared) {
+      await invoke("clear_prepared_dataset_load", { loadId }).catch(() => {});
+    }
   }
-  return allItems;
 }
 
 export async function resaveLabelsToFile(_dataset: Dataset, item: DatasetItem) {
@@ -236,6 +158,7 @@ export async function resaveLabelsToFile(_dataset: Dataset, item: DatasetItem) {
     contents,
     { append: false }
   );
+  item.hasLabelFile = true;
 }
 
 export async function itemImagePath(
@@ -258,108 +181,11 @@ export async function itemLabelPath(
 }
 
 export async function deleteItem(dataset: Dataset, item: DatasetItem) {
-  await Promise.all([
-    itemImagePath(dataset, item).then(remove),
-    itemLabelPath(dataset, item).then(remove),
-  ]);
-}
+  const imagePath = await itemImagePath(dataset, item);
+  const labelPath = await itemLabelPath(dataset, item);
 
-export async function getDatasetCount(dataset: Dataset): Promise<number> {
-  await validateDirectories(dataset);
-
-  let total = 0;
-  for (const { imagesDir } of datasetDirs(dataset)) {
-    try {
-      const imageFiles = await readDir(imagesDir);
-      total += imageFiles.filter((entry) => entry.isFile).length;
-    } catch (err) {
-      throw new DatasetLoadError(`Failed to read images directory: ${err}`);
-    }
+  await remove(imagePath);
+  if (await exists(labelPath)) {
+    await remove(labelPath);
   }
-
-  return total;
-}
-
-export async function loadDatasetBatch(
-  dataset: Dataset,
-  offset: number,
-  limit: number
-): Promise<DatasetItem[]> {
-  await validateDirectories(dataset);
-
-  const dirs = datasetDirs(dataset);
-  const allItems: DatasetItem[] = [];
-
-  for (const { imagesDir, labelsDir } of dirs) {
-    if (allItems.length >= offset + limit) break;
-
-    let imageFiles;
-    try {
-      imageFiles = await readDir(imagesDir);
-      imageFiles = imageFiles.filter((entry) => entry.isFile);
-    } catch (err) {
-      throw new DatasetLoadError(`Failed to read images directory: ${err}`);
-    }
-
-    const endOfDir = allItems.length + imageFiles.length;
-    if (endOfDir <= offset) {
-      allItems.push(...Array(imageFiles.length).fill(null));
-      continue;
-    }
-
-    const localStart = Math.max(0, offset - allItems.length);
-    const localEnd = Math.min(imageFiles.length, offset + limit - allItems.length);
-    const batchFiles = imageFiles.slice(localStart, localEnd);
-
-    const dirPath = imagesDir.split(/[/\\]/);
-    const segIdx = dirPath.lastIndexOf("videos");
-    const prefix = segIdx >= 0 ? dirPath.slice(segIdx + 1, -1).join("/") : undefined;
-
-    const itemsPromises = batchFiles.map(
-      async (imageFileEntry): Promise<DatasetItem> => {
-        try {
-          const name = removeExtension(imageFileEntry.name);
-          const fullName = prefix ? `${prefix}/${name}` : name;
-          const labelName = `${name}.txt`;
-          const labelPath = await path.join(labelsDir, labelName);
-          const labels: DatasetLabel[] = [];
-          const labelFileExists = await exists(labelPath);
-          
-          if (labelFileExists) {
-            try {
-              const lines = await readTextFileLines(labelPath);
-              for await (const line of lines) {
-                if (line.trim()) {
-                  labels.push(parseLabelFromYoloLine(line));
-                }
-              }
-            } catch (err) {
-              throw new MalformedLabelError(labelName, err instanceof Error ? err.message : String(err));
-            }
-          }
-          
-          return {
-            name: fullName,
-            imageSrc: convertFileSrc(
-              await path.join(imagesDir, imageFileEntry.name)
-            ),
-            labels,
-            hasLabelFile: labelFileExists,
-            imagesDir,
-            labelsDir,
-          };
-        } catch (err) {
-          if (err instanceof MalformedLabelError) {
-            throw err;
-          }
-          throw new DatasetLoadError(`Failed to load file ${imageFileEntry.name}: ${err}`);
-        }
-      }
-    );
-
-    const items = await Promise.all(itemsPromises);
-    allItems.push(...items);
-  }
-
-  return allItems.filter(Boolean);
 }
