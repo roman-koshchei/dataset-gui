@@ -37,6 +37,7 @@
 
   let filterHasBoxes = $state(false);
   let filterNoBoxes = $state(false);
+  let filterHasLabelFile = $state(false);
   let filterByClass = $state(false);
   let filterClassId = $state<string>("0");
   let filterByNth = $state(false);
@@ -71,7 +72,7 @@
   }
 
   let filteredItems = $derived(() => {
-    if (!filterHasBoxes && !filterNoBoxes && !filterByClass && !filterByNth) {
+    if (!filterHasBoxes && !filterNoBoxes && !filterHasLabelFile && !filterByClass && !filterByNth) {
       return loadedItems;
     }
 
@@ -84,6 +85,10 @@
 
       if (filterNoBoxes) {
         return !hasLabels;
+      }
+
+      if (filterHasLabelFile) {
+        return item.hasLabelFile;
       }
 
       if (filterByClass) {
@@ -253,6 +258,7 @@
           
           filterHasBoxes = false;
           filterNoBoxes = false;
+          filterHasLabelFile = false;
           filterByClass = false;
           filterClassId = "0";
           filterByNth = false;
@@ -296,6 +302,7 @@
       onclick={() => {
         filterHasBoxes = !filterHasBoxes;
         filterNoBoxes = false;
+        filterHasLabelFile = false;
         filterByClass = false;
       }}
     >
@@ -307,10 +314,24 @@
       onclick={() => {
         filterNoBoxes = !filterNoBoxes;
         filterHasBoxes = false;
+        filterHasLabelFile = false;
         filterByClass = false;
       }}
     >
       No boxes
+    </button>
+
+    <button
+      class="px-3 border-r border-zinc-700 py-1 {filterHasLabelFile ? 'bg-zinc-600' : ''}"
+      onclick={() => {
+        filterHasLabelFile = !filterHasLabelFile;
+        filterHasBoxes = false;
+        filterNoBoxes = false;
+        filterByClass = false;
+        filterByNth = false;
+      }}
+    >
+      Has label file
     </button>
 
     <div class="px-3 flex items-center gap-2 border-r border-zinc-700 {filterByClass ? 'bg-zinc-600' : ''}">
@@ -320,6 +341,7 @@
           filterByClass = !filterByClass;
           filterHasBoxes = false;
           filterNoBoxes = false;
+          filterHasLabelFile = false;
           filterByNth = false;
         }}
       >
@@ -340,6 +362,7 @@
           filterByNth = !filterByNth;
           filterHasBoxes = false;
           filterNoBoxes = false;
+          filterHasLabelFile = false;
           filterByClass = false;
         }}
       >

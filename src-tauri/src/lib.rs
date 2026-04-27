@@ -65,6 +65,7 @@ struct DatasetItem {
     name: String,
     image_src: String,
     labels: Vec<DatasetLabel>,
+    has_label_file: bool,
 }
 
 struct WatcherEntry {
@@ -95,12 +96,12 @@ fn parse_yolo_line(line: &str) -> Option<DatasetLabel> {
     })
 }
 
-fn load_labels_for_name(labels_dir: &Path, name: &str) -> Vec<DatasetLabel> {
+fn load_labels_for_name(labels_dir: &Path, name: &str) -> (Vec<DatasetLabel>, bool) {
     let label_path = labels_dir.join(format!("{}.txt", name));
     if !label_path.exists() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
-    match fs::read_to_string(&label_path) {
+    let labels = match fs::read_to_string(&label_path) {
         Ok(content) => content
             .lines()
             .filter_map(|line| {
@@ -113,7 +114,8 @@ fn load_labels_for_name(labels_dir: &Path, name: &str) -> Vec<DatasetLabel> {
             })
             .collect(),
         Err(_) => Vec::new(),
-    }
+    };
+    (labels, true)
 }
 
 fn convert_to_asset_src(file_path: &str) -> String {
@@ -180,7 +182,7 @@ fn load_dataset_batch(
                 .map(|(n, _)| n.to_string())
                 .unwrap_or(file_name_str.clone());
 
-            let labels = load_labels_for_name(lbl_dir, &name);
+            let (labels, has_label_file) = load_labels_for_name(lbl_dir, &name);
 
             let full_path = entry.path().to_string_lossy().to_string();
             let image_src = convert_to_asset_src(&full_path);
@@ -189,6 +191,7 @@ fn load_dataset_batch(
                 name,
                 image_src,
                 labels,
+                has_label_file,
             }
         })
         .collect();
@@ -221,7 +224,7 @@ fn load_single_item(
         None => return Ok(None),
     };
 
-    let labels = load_labels_for_name(lbl_dir, &name);
+    let (labels, has_label_file) = load_labels_for_name(lbl_dir, &name);
     let full_path = entry.path().to_string_lossy().to_string();
     let mut image_src = convert_to_asset_src(&full_path);
 
@@ -237,6 +240,7 @@ fn load_single_item(
         name,
         image_src,
         labels,
+        has_label_file,
     }))
 }
 

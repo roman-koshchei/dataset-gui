@@ -98,6 +98,7 @@ export type DatasetItem = {
   name: string;
   imageSrc: string;
   labels: DatasetLabel[];
+  hasLabelFile: boolean;
   imagesDir: string;
   labelsDir: string;
 };
@@ -171,8 +172,9 @@ async function loadItemsFromDir(
         const labelName = `${name}.txt`;
         const labelPath = await path.join(labelsDir, labelName);
         const labels: DatasetLabel[] = [];
+        const labelFileExists = await exists(labelPath);
         
-        if (await exists(labelPath)) {
+        if (labelFileExists) {
           try {
             const lines = await readTextFileLines(labelPath);
             for await (const line of lines) {
@@ -191,6 +193,7 @@ async function loadItemsFromDir(
             await path.join(imagesDir, imageFileEntry.name)
           ),
           labels,
+          hasLabelFile: labelFileExists,
           imagesDir,
           labelsDir,
         };
@@ -320,8 +323,9 @@ export async function loadDatasetBatch(
           const labelName = `${name}.txt`;
           const labelPath = await path.join(labelsDir, labelName);
           const labels: DatasetLabel[] = [];
+          const labelFileExists = await exists(labelPath);
           
-          if (await exists(labelPath)) {
+          if (labelFileExists) {
             try {
               const lines = await readTextFileLines(labelPath);
               for await (const line of lines) {
@@ -340,6 +344,7 @@ export async function loadDatasetBatch(
               await path.join(imagesDir, imageFileEntry.name)
             ),
             labels,
+            hasLabelFile: labelFileExists,
             imagesDir,
             labelsDir,
           };
