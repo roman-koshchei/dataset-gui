@@ -102,6 +102,14 @@ export type DatasetItem = {
   labelsDir: string;
 };
 
+export function datasetItemKey(item: DatasetItem): string {
+  return `${item.imagesDir}\0${item.imageSrc}`;
+}
+
+export function datasetLabelKey(label: DatasetLabel): string {
+  return `${label.left},${label.top},${label.left + label.width},${label.top + label.height}`;
+}
+
 async function validateDirectories(dataset: Dataset): Promise<void> {
   for (const { imagesDir, labelsDir } of datasetDirs(dataset)) {
     const [imagesExist, labelsExist] = await Promise.all([

@@ -1,6 +1,8 @@
 <script lang="ts">
   import {
     deleteItem,
+    datasetItemKey,
+    datasetLabelKey,
     itemImagePath,
     itemLabelPath,
     resaveLabelsToFile,
@@ -49,13 +51,14 @@
 
   function commitItem(updatedItem: DatasetItem) {
     const nextItem = cloneItem(updatedItem);
-    const loadedIndex = loadedItems.findIndex((x) => x.name === nextItem.name);
+    const nextItemKey = datasetItemKey(nextItem);
+    const loadedIndex = loadedItems.findIndex((x) => datasetItemKey(x) === nextItemKey);
     if (loadedIndex !== -1) {
       loadedItems[loadedIndex] = nextItem;
     }
 
     if (items) {
-      const itemsIndex = items.findIndex((x) => x.name === nextItem.name);
+      const itemsIndex = items.findIndex((x) => datasetItemKey(x) === nextItemKey);
       if (itemsIndex !== -1) {
         items[itemsIndex] = cloneItem(nextItem);
       }
@@ -101,7 +104,8 @@
   let onPrev = $derived(() => {
     if (!selectedItem) return undefined;
     const items = filteredItems();
-    const idx = items.findIndex((x) => x.name === selectedItem!.name);
+    const selectedItemKey = datasetItemKey(selectedItem);
+    const idx = items.findIndex((x) => datasetItemKey(x) === selectedItemKey);
     if (idx <= 0) return undefined;
     return () => {
       commitSelectedItem();
@@ -112,7 +116,8 @@
   let onNext = $derived(() => {
     if (!selectedItem) return undefined;
     const items = filteredItems();
-    const idx = items.findIndex((x) => x.name === selectedItem!.name);
+    const selectedItemKey = datasetItemKey(selectedItem);
+    const idx = items.findIndex((x) => datasetItemKey(x) === selectedItemKey);
     if (idx === -1 || idx >= items.length - 1) return undefined;
     return () => {
       commitSelectedItem();
@@ -150,10 +155,11 @@
     }
   }
 
-  async function handleDelete(name: string) {
-    const index = loadedItems.findIndex((x) => x.name === name);
+  async function handleDelete(itemToDelete: DatasetItem) {
+    const itemToDeleteKey = datasetItemKey(itemToDelete);
+    const index = loadedItems.findIndex((x) => datasetItemKey(x) === itemToDeleteKey);
     if (index === -1) {
-      console.error(`Item not found: ${name}`);
+      console.error(`Item not found: ${itemToDelete.name}`);
       return;
     }
     const item = loadedItems[index];
@@ -161,13 +167,13 @@
       await deleteItem(dataset, item);
       loadedItems.splice(index, 1);
       if (items) {
-        const itemsIndex = items.findIndex((x) => x.name === name);
+        const itemsIndex = items.findIndex((x) => datasetItemKey(x) === itemToDeleteKey);
         if (itemsIndex !== -1) {
           items.splice(itemsIndex, 1);
         }
       }
     } catch (err) {
-      alert(`Failed to delete ${name}: ${err instanceof Error ? err.message : String(err)}`);
+      alert(`Failed to delete ${itemToDelete.name}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -353,7 +359,7 @@
     bind:this={scrollContainer}
     class="overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 divide-y divide-x divide-zinc-700"
   >
-    {#each filteredItems() as item (item.name)}
+    {#each filteredItems() as item (datasetItemKey(item))}
       <div class="p-1 grid grid-rows-[auto_1fr] gap-1">
         <button
           class="relative overflow-hidden"
@@ -368,7 +374,7 @@
             loading="lazy"
           />
 
-          {#each item.labels as label}
+          {#each item.labels as label (datasetLabelKey(label))}
             <div
               class={[
                 "absolute border",
@@ -387,7 +393,7 @@
           <p>{item.name}</p>
           <button
             onclick={() => {
-              handleDelete(item.name);
+              handleDelete(item);
             }}
             class="bg-red-700 px-1"
           >
