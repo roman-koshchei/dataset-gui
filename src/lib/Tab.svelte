@@ -3,8 +3,9 @@
   import DatasetGrid from "./DatasetGrid.svelte";
   import VideoManagement from "./VideoManagement.svelte";
   import { emptyVideoCollection } from "./video-collection";
-  import { writeTextFile } from "@tauri-apps/plugin-fs";
+  import { writeTextFile, exists } from "@tauri-apps/plugin-fs";
   import { load } from "@tauri-apps/plugin-store";
+  import { open } from "@tauri-apps/plugin-dialog";
   import type { Dataset } from "./dataset";
 
   let {
@@ -45,16 +46,6 @@
     return store;
   }
 
-  async function loadVideoPath() {
-    try {
-      const s = await getStore();
-      const saved = await s.get<string>("videoDataPath");
-      if (saved) videoDataPath = saved;
-      const savedDir = await s.get<string>("videosDir");
-      if (savedDir) videosDir = savedDir;
-    } catch { }
-  }
-
   async function saveVideoPath() {
     try {
       const s = await getStore();
@@ -63,8 +54,6 @@
       await s.save();
     } catch { }
   }
-
-  void loadVideoPath();
 
   let imagesDir = $state("");
   let labelsDir = $state("");
@@ -87,19 +76,23 @@
   }
 
   async function createNewCollection() {
-    if (!videoDataPath.trim()) {
-      videoError = "Specify a data.json path for the new collection";
-      return;
-    }
-    if (!videoDataPath.endsWith("data.json")) {
-      videoError = "Path must end with data.json";
-      return;
-    }
-    videoError = "";
     try {
+      const selected = await open({ directory: true, title: "Select folder for new collection" });
+      if (!selected) return;
+
+      const folder = typeof selected === "string" ? selected : selected[0];
+      const dataPath = folder.replace(/[/\\]?$/, "") + "/data.json";
+      const folderName = folder.replace(/[/\\]/g, "/").split("/").pop() || "";
+
+      if (await exists(dataPath)) {
+        videoError = "data.json already exists in this folder. Use 'Manage Videos' to open it.";
+        return;
+      }
+
       const collection = emptyVideoCollection();
-      collection.collection = videoDataPath.replace(/[/\\]data\.json$/, "").split(/[/\\]/).pop() || "";
-      await writeTextFile(videoDataPath, JSON.stringify(collection, null, 2) + "\n");
+      collection.collection = folderName;
+      await writeTextFile(dataPath, JSON.stringify(collection, null, 2) + "\n");
+      videoDataPath = dataPath;
       await saveVideoPath();
       await pushToVideoHistory(videoDataPath, videosDir);
       viewMode = "videos";
