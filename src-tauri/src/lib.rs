@@ -91,6 +91,10 @@ struct DatasetLoadState {
     loads: HashMap<String, Vec<PreparedDatasetEntry>>,
 }
 
+struct StoredDatasetState {
+    datasets: HashMap<String, Vec<DatasetItem>>,
+}
+
 struct WatcherEntry {
     #[allow(dead_code)]
     watcher: RecommendedWatcher,
@@ -273,6 +277,43 @@ fn validate_dataset_dir(dir: &DatasetDir) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FilterParams {
+    mode: String,
+    class_id: Option<u32>,
+    nth: Option<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilteredWindow {
+    total_filtered: usize,
+    items: Vec<DatasetItem>,
+}
+
+fn dataset_item_key(name: &str, images_dir: &str) -> String {
+    format!("{}\0{}", images_dir, name)
+}
+
+fn item_base_name(name: &str) -> &str {
+    name.rsplit_once('/').map(|(_, n)| n).unwrap_or(name)
+}
+
+fn matches_filter(item: &DatasetItem, index: usize, filter: &FilterParams) -> bool {
+    match filter.mode.as_str() {
+        "all" => true,
+        "hasBoxes" => !item.labels.is_empty(),
+        "noBoxes" => item.labels.is_empty(),
+        "hasLabelFile" => item.has_label_file,
+        "class" => filter
+            .class_id
+            .map_or(false, |cid| item.labels.iter().any(|l| l.class_id == cid)),
+        "nth" => filter.nth.map_or(false, |n| n >= 1 && index % (n as usize) == 0),
+        _ => true,
+    }
+}
+
 #[tauri::command]
 fn prepare_dataset_load(
     state: State<'_, Mutex<DatasetLoadState>>,
@@ -337,6 +378,171 @@ fn clear_prepared_dataset_load(
 ) -> Result<(), String> {
     let mut state = state.lock().map_err(|e| e.to_string())?;
     state.loads.remove(&load_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn load_and_store_batch(
+    load_state: State<'_, Mutex<DatasetLoadState>>,
+    store_state: State<'_, Mutex<StoredDatasetState>>,
+    load_id: String,
+    offset: usize,
+    limit: usize,
+) -> Result<usize, String> {
+    let batch_entries = {
+        let state = load_state.lock().map_err(|e| e.to_string())?;
+        let entries = state
+            .loads
+            .get(&load_id)
+            .ok_or_else(|| format!("Prepared dataset load not found: {}", load_id))?;
+
+        if offset >= entries.len() {
+            return Ok(0);
+        }
+
+        let end = std::cmp::min(offset + limit, entries.len());
+        entries[offset..end].to_vec()
+    };
+
+    let items: Vec<DatasetItem> = batch_entries
+        .par_iter()
+        .map(dataset_item_from_prepared_entry)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let count = items.len();
+
+    let mut store = store_state.lock().map_err(|e| e.to_string())?;
+    store.datasets.entry(load_id).or_default().extend(items);
+
+    Ok(count)
+}
+
+#[tauri::command]
+fn get_filtered_window(
+    state: State<'_, Mutex<StoredDatasetState>>,
+    load_id: String,
+    filter: FilterParams,
+    offset: usize,
+    limit: usize,
+) -> Result<FilteredWindow, String> {
+    let state_guard = state.lock().map_err(|e| e.to_string())?;
+    let items = state_guard
+        .datasets
+        .get(&load_id)
+        .ok_or_else(|| format!("Stored dataset not found: {}", load_id))?;
+
+    let matching_indices: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(index, item)| matches_filter(item, *index, &filter))
+        .map(|(index, _)| index)
+        .collect();
+
+    let total_filtered = matching_indices.len();
+    let start = offset.min(total_filtered);
+    let end = (offset + limit).min(total_filtered);
+
+    let window_items: Vec<DatasetItem> = matching_indices[start..end]
+        .iter()
+        .map(|&i| items[i].clone())
+        .collect();
+
+    Ok(FilteredWindow {
+        total_filtered,
+        items: window_items,
+    })
+}
+
+#[tauri::command]
+fn update_stored_item(
+    state: State<'_, Mutex<StoredDatasetState>>,
+    load_id: String,
+    item: DatasetItem,
+) -> Result<(), String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let items = state
+        .datasets
+        .get_mut(&load_id)
+        .ok_or_else(|| format!("Stored dataset not found: {}", load_id))?;
+
+    let key = dataset_item_key(&item.name, &item.images_dir);
+    if let Some(stored) = items
+        .iter_mut()
+        .find(|i| dataset_item_key(&i.name, &i.images_dir) == key)
+    {
+        *stored = item;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_stored_item(
+    state: State<'_, Mutex<StoredDatasetState>>,
+    load_id: String,
+    name: String,
+    images_dir: String,
+) -> Result<(), String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let items = state
+        .datasets
+        .get_mut(&load_id)
+        .ok_or_else(|| format!("Stored dataset not found: {}", load_id))?;
+
+    let key = dataset_item_key(&name, &images_dir);
+    let before = items.len();
+    items.retain(|i| dataset_item_key(&i.name, &i.images_dir) != key);
+    if items.len() == before {
+        return Err(format!("Item not found: {}", name));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn resave_all_labels(
+    state: State<'_, Mutex<StoredDatasetState>>,
+    load_id: String,
+) -> Result<usize, String> {
+    let items = {
+        let state = state.lock().map_err(|e| e.to_string())?;
+        state
+            .datasets
+            .get(&load_id)
+            .ok_or_else(|| format!("Stored dataset not found: {}", load_id))?
+            .clone()
+    };
+
+    let count = items
+        .par_iter()
+        .filter(|item| item.has_label_file || !item.labels.is_empty())
+        .map(|item| {
+            let mut content = String::new();
+            for label in &item.labels {
+                let x_center = label.left + label.width / 2.0;
+                let y_center = label.top + label.height / 2.0;
+                content.push_str(&format!(
+                    "{} {:.6} {:.6} {:.6} {:.6}\n",
+                    label.class_id, x_center, y_center, label.width, label.height
+                ));
+            }
+            let base = item_base_name(&item.name);
+            let label_path = Path::new(&item.labels_dir).join(format!("{}.txt", base));
+            fs::write(label_path, content)
+        })
+        .filter(|r| r.is_ok())
+        .count();
+
+    Ok(count)
+}
+
+#[tauri::command]
+fn clear_stored_dataset(
+    state: State<'_, Mutex<StoredDatasetState>>,
+    load_id: String,
+) -> Result<(), String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    state.datasets.remove(&load_id);
     Ok(())
 }
 
@@ -670,11 +876,20 @@ pub fn run() {
         .manage(Mutex::new(DatasetLoadState {
             loads: HashMap::new(),
         }))
+        .manage(Mutex::new(StoredDatasetState {
+            datasets: HashMap::new(),
+        }))
         .manage(cli_args)
         .invoke_handler(tauri::generate_handler![
             prepare_dataset_load,
             load_prepared_dataset_batch,
             clear_prepared_dataset_load,
+            load_and_store_batch,
+            get_filtered_window,
+            update_stored_item,
+            remove_stored_item,
+            resave_all_labels,
+            clear_stored_dataset,
             get_dataset_count,
             load_dataset_batch,
             load_single_item,

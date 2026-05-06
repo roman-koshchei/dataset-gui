@@ -77,7 +77,7 @@ export type DatasetItem = {
 };
 
 export function datasetItemKey(item: DatasetItem): string {
-  return `${item.imagesDir}\0${item.imageSrc}`;
+  return `${item.imagesDir}\0${item.name}`;
 }
 
 export function datasetLabelKey(label: DatasetLabel): string {
@@ -142,6 +142,67 @@ export async function loadWholeDataset(
       await invoke("clear_prepared_dataset_load", { loadId }).catch(() => {});
     }
   }
+}
+
+export type FilterParams = {
+  mode: string;
+  classId?: number;
+  nth?: number;
+};
+
+export type FilteredWindow = {
+  totalFiltered: number;
+  items: DatasetItem[];
+};
+
+export async function loadAndStoreBatch(
+  loadId: string,
+  offset: number,
+  limit: number
+): Promise<number> {
+  return invoke<number>("load_and_store_batch", { loadId, offset, limit });
+}
+
+export async function getFilteredWindow(
+  loadId: string,
+  filter: FilterParams,
+  offset: number,
+  limit: number
+): Promise<FilteredWindow> {
+  return invoke<FilteredWindow>("get_filtered_window", { loadId, filter, offset, limit });
+}
+
+export async function updateStoredItem(
+  loadId: string,
+  item: DatasetItem
+): Promise<void> {
+  await invoke("update_stored_item", { loadId, item });
+}
+
+export async function removeStoredItem(
+  loadId: string,
+  name: string,
+  imagesDir: string
+): Promise<void> {
+  await invoke("remove_stored_item", { loadId, name, imagesDir });
+}
+
+export async function resaveAllLabels(loadId: string): Promise<number> {
+  return invoke<number>("resave_all_labels", { loadId });
+}
+
+export async function clearStoredDataset(loadId: string): Promise<void> {
+  await invoke("clear_stored_dataset", { loadId });
+}
+
+export function getItemBaseName(name: string): string {
+  return name.includes("/") ? name.split("/").pop()! : name;
+}
+
+export function getItemImageExt(item: DatasetItem): string {
+  const filename = item.imageSrc.split("/").pop() ?? "";
+  const lastDot = filename.lastIndexOf(".");
+  return lastDot === -1 ? "" : filename.slice(lastDot + 1);
 }
 
 export async function resaveLabelsToFile(_dataset: Dataset, item: DatasetItem) {

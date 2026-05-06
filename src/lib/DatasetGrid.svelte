@@ -1,33 +1,43 @@
 <script lang="ts">
   import {
-    deleteItem,
     datasetItemKey,
     datasetLabelKey,
+    logPerformance,
+    loadAndStoreBatch,
+    getFilteredWindow,
+    updateStoredItem,
+    removeStoredItem,
+    resaveAllLabels,
+    clearStoredDataset,
+    getItemBaseName,
+    getItemImageExt,
     itemImagePath,
     itemLabelPath,
-    logPerformance,
-    loadWholeDataset,
-    resaveLabelsToFile,
     type Dataset,
     type DatasetLoadProgress,
     type DatasetItem,
+    type FilterParams,
   } from "./dataset";
   import EditDialog from "./EditDialog.svelte";
   import { numberToTailwindBorder } from "./helpers";
+  import { invoke } from "@tauri-apps/api/core";
   import { onMount, tick } from "svelte";
 
   type FilterMode = "all" | "hasBoxes" | "noBoxes" | "hasLabelFile" | "class" | "nth";
   const OVERSCAN_ROWS = 3;
   const IMAGE_ASPECT_RATIO = 9 / 16;
   const CARD_CHROME_HEIGHT = 44;
+  const LOAD_BATCH_SIZE = 500;
+  const CACHE_SIZE = 200;
+  const CACHE_PREFETCH_MARGIN_ROWS = 5;
 
   let { dataset }: { dataset: Dataset } = $props();
 
   let selectedItem = $state<DatasetItem | null>(null);
+  let selectedKey = $state<string | null>(null);
   let isLoadingDataset = $state(false);
   let loadError = $state("");
   let saveAllIsActive = $state(false);
-  let loadedItems = $state<DatasetItem[]>([]);
   let activeLoadId = "";
   let loadProgress = $state<DatasetLoadProgress | null>(null);
   let scrollContainer = $state<HTMLDivElement | undefined>(undefined);
@@ -40,6 +50,13 @@
   let filterMode = $state<FilterMode>("all");
   let filterClassId = $state<string>("0");
   let filterNthValue = $state(1);
+
+  let loadId = $state("");
+  let totalItems = $state(0);
+  let filteredTotal = $state(0);
+  let cacheItems = $state<DatasetItem[]>([]);
+  let cacheOffset = 0;
+  let pendingFetchRequest: Promise<void> | null = null;
 
   let loadProgressPercent = $derived(() => {
     if (!loadProgress || loadProgress.total <= 0) return null;
@@ -57,6 +74,14 @@
     await revealItemInDir(paths);
   }
 
+  function currentFilter(): FilterParams {
+    return {
+      mode: filterMode,
+      classId: filterMode === "class" ? parseInt(filterClassId, 10) || 0 : undefined,
+      nth: filterMode === "nth" ? filterNthValue : undefined,
+    };
+  }
+
   function resetFilterState() {
     filterMode = "all";
     filterClassId = "0";
@@ -64,9 +89,16 @@
     resetScrollPosition();
   }
 
+  function applyFilter() {
+    resetScrollPosition();
+    if (loadId && !isLoadingDataset) {
+      void refreshCache(0);
+    }
+  }
+
   function toggleFilterMode(mode: Exclude<FilterMode, "all">) {
     filterMode = filterMode === mode ? "all" : mode;
-    resetScrollPosition();
+    applyFilter();
   }
 
   function resetScrollPosition() {
@@ -89,54 +121,26 @@
     };
   }
 
-  function commitItem(updatedItem: DatasetItem) {
-    const nextItem = cloneItem(updatedItem);
-    const nextItemKey = datasetItemKey(nextItem);
-    const loadedIndex = loadedItems.findIndex((x) => datasetItemKey(x) === nextItemKey);
-    if (loadedIndex !== -1) {
-      loadedItems[loadedIndex] = nextItem;
-    }
-  }
-
-  function commitSelectedItem() {
+  function commitToCache() {
     if (!selectedItem) return;
-    commitItem(selectedItem);
+    const key = datasetItemKey(selectedItem);
+    const cacheIdx = cacheItems.findIndex((x) => datasetItemKey(x) === key);
+    if (cacheIdx !== -1) {
+      cacheItems[cacheIdx] = cloneItem(selectedItem);
+    }
+    if (loadId) {
+      void updateStoredItem(loadId, selectedItem);
+    }
   }
 
-  let filteredItems = $derived(() => {
-    if (filterMode === "all") {
-      return loadedItems;
-    }
-
-    return loadedItems.filter((item, index) => {
-      const hasLabels = item.labels.length > 0;
-
-      if (filterMode === "hasBoxes") {
-        return hasLabels;
-      }
-
-      if (filterMode === "noBoxes") {
-        return !hasLabels;
-      }
-
-      if (filterMode === "hasLabelFile") {
-        return item.hasLabelFile;
-      }
-
-      if (filterMode === "class") {
-        const classId = parseInt(filterClassId, 10);
-        if (isNaN(classId)) return false;
-        return item.labels.some((label) => label.classId === classId);
-      }
-
-      if (filterMode === "nth") {
-        if (filterNthValue < 1) return false;
-        return index % filterNthValue === 0;
-      }
-
-      return true;
-    });
-  });
+  async function refreshCache(newOffset?: number) {
+    if (!loadId) return;
+    const offset = newOffset ?? Math.max(0, cacheOffset);
+    const result = await getFilteredWindow(loadId, currentFilter(), offset, CACHE_SIZE);
+    cacheItems = result.items;
+    cacheOffset = offset;
+    filteredTotal = result.totalFiltered;
+  }
 
   let columnCount = $derived(() => {
     if (containerWidth >= 1024) return 3;
@@ -149,7 +153,7 @@
     return Math.ceil(cardWidth * IMAGE_ASPECT_RATIO + CARD_CHROME_HEIGHT);
   });
 
-  let totalRows = $derived(() => Math.ceil(filteredItems().length / columnCount()));
+  let totalRows = $derived(() => Math.ceil(filteredTotal / columnCount()));
   let virtualStartRow = $derived(() => Math.max(0, Math.floor(scrollTop / rowHeight()) - OVERSCAN_ROWS));
   let virtualEndRow = $derived(() => Math.min(
     totalRows(),
@@ -158,21 +162,39 @@
 
   let virtualRows = $derived(() => {
     const rows: { rowIndex: number; items: DatasetItem[] }[] = [];
-    const items = filteredItems();
     const columns = columnCount();
 
     for (let rowIndex = virtualStartRow(); rowIndex < virtualEndRow(); rowIndex += 1) {
       const start = rowIndex * columns;
-      rows.push({
-        rowIndex,
-        items: items.slice(start, start + columns),
-      });
+      const rowItems: DatasetItem[] = [];
+      for (let col = 0; col < columns; col++) {
+        const filteredIndex = start + col;
+        const cacheIdx = filteredIndex - cacheOffset;
+        if (cacheIdx >= 0 && cacheIdx < cacheItems.length) {
+          rowItems.push(cacheItems[cacheIdx]);
+        }
+      }
+      rows.push({ rowIndex, items: rowItems });
     }
 
     return rows;
   });
 
   let renderedVirtualItemCount = $derived(() => virtualRows().reduce((count, row) => count + row.items.length, 0));
+
+  function checkCacheRefresh() {
+    if (cacheItems.length === 0 || !loadId || pendingFetchRequest) return;
+
+    const visibleStart = virtualStartRow() * columnCount();
+    const visibleEnd = virtualEndRow() * columnCount();
+    const cacheEnd = cacheOffset + cacheItems.length;
+    const margin = columnCount() * CACHE_PREFETCH_MARGIN_ROWS;
+
+    if (visibleStart < cacheOffset + margin || visibleEnd + margin > cacheEnd) {
+      const center = Math.max(0, Math.floor((visibleStart + visibleEnd) / 2) - Math.floor(CACHE_SIZE / 2));
+      pendingFetchRequest = refreshCache(center).finally(() => { pendingFetchRequest = null; });
+    }
+  }
 
   function virtualRangeFor(nextScrollTop: number) {
     const height = rowHeight();
@@ -199,6 +221,7 @@
     }
 
     scrollTop = nextScrollTop;
+    checkCacheRefresh();
   }
 
   function scheduleVirtualScrollUpdate(nextScrollTop: number) {
@@ -212,37 +235,39 @@
   }
 
   let onPrev = $derived(() => {
-    if (!selectedItem) return undefined;
-    const items = filteredItems();
-    const selectedItemKey = datasetItemKey(selectedItem);
-    const idx = items.findIndex((x) => datasetItemKey(x) === selectedItemKey);
-    if (idx <= 0) return undefined;
+    if (!selectedKey) return undefined;
+    const cacheIdx = cacheItems.findIndex((x) => datasetItemKey(x) === selectedKey);
+    if (cacheIdx <= 0) return undefined;
     return () => {
-      commitSelectedItem();
-      selectedItem = cloneItem(items[idx - 1]);
+      commitToCache();
+      selectedKey = datasetItemKey(cacheItems[cacheIdx - 1]);
+      selectedItem = cloneItem(cacheItems[cacheIdx - 1]);
     };
   });
 
   let onNext = $derived(() => {
-    if (!selectedItem) return undefined;
-    const items = filteredItems();
-    const selectedItemKey = datasetItemKey(selectedItem);
-    const idx = items.findIndex((x) => datasetItemKey(x) === selectedItemKey);
-    if (idx === -1 || idx >= items.length - 1) return undefined;
+    if (!selectedKey) return undefined;
+    const cacheIdx = cacheItems.findIndex((x) => datasetItemKey(x) === selectedKey);
+    if (cacheIdx === -1 || cacheIdx >= cacheItems.length - 1) return undefined;
     return () => {
-      commitSelectedItem();
-      selectedItem = cloneItem(items[idx + 1]);
+      commitToCache();
+      selectedKey = datasetItemKey(cacheItems[cacheIdx + 1]);
+      selectedItem = cloneItem(cacheItems[cacheIdx + 1]);
     };
   });
 
   async function reloadDataset(resetFilters = false) {
-    const loadId = crypto.randomUUID();
+    const newLoadId = crypto.randomUUID();
     const startMs = performance.now();
-    activeLoadId = loadId;
+    activeLoadId = newLoadId;
     isLoadingDataset = true;
     loadError = "";
-    loadProgress = { loadId, phase: "Starting", loaded: 0, total: 0 };
-    loadedItems = [];
+    totalItems = 0;
+    filteredTotal = 0;
+    cacheItems = [];
+    cacheOffset = 0;
+    loadId = "";
+    loadProgress = { loadId: newLoadId, phase: "Starting", loaded: 0, total: 0 };
     resetScrollPosition();
     selectedItem = null;
     if (resetFilters) {
@@ -250,52 +275,80 @@
     }
 
     try {
-      logPerformance(`DatasetGrid reload started: loadId=${loadId} dirs=${dataset.dirs.length}`);
-      const nextItems = await loadWholeDataset(dataset, loadId, (progress) => {
-        if (progress.loadId !== activeLoadId) return;
-        loadProgress = progress;
-      });
-      if (loadId !== activeLoadId) return;
-      logPerformance(`DatasetGrid received metadata: loadId=${loadId} items=${nextItems.length} elapsedMs=${Math.round(performance.now() - startMs)}`);
-      loadedItems = nextItems;
+      logPerformance(`DatasetGrid reload started: loadId=${newLoadId} dirs=${dataset.dirs.length}`);
+      loadProgress = { loadId: newLoadId, phase: "Scanning files", loaded: 0, total: dataset.dirs.length };
+
+      const total = await invoke<number>("prepare_dataset_load", { loadId: newLoadId, dirs: dataset.dirs });
+      totalItems = total;
+      logPerformance(`Prepared dataset load: total=${total} elapsedMs=${Math.round(performance.now() - startMs)}`);
+
+      let loaded = 0;
+      loadProgress = { loadId: newLoadId, phase: "Loading labels", loaded, total };
+
+      for (let offset = 0; offset < total; offset += LOAD_BATCH_SIZE) {
+        const count = await loadAndStoreBatch(
+          newLoadId,
+          offset,
+          Math.min(LOAD_BATCH_SIZE, total - offset),
+        );
+        loaded += count;
+        loadProgress = { loadId: newLoadId, phase: "Loading labels", loaded, total };
+        logPerformance(`Loaded and stored batch: loaded=${loaded}/${total}`);
+        if (count === 0) break;
+        if (newLoadId !== activeLoadId) return;
+      }
+
+      await invoke("clear_prepared_dataset_load", { loadId: newLoadId }).catch(() => {});
+
+      if (newLoadId !== activeLoadId) return;
+
+      loadId = newLoadId;
+      await refreshCache(0);
+
       isLoadingDataset = false;
       loadProgress = null;
+
       await tick();
-      if (loadId !== activeLoadId) return;
-      logPerformance(`DatasetGrid initial render complete: loadId=${loadId} renderedItems=${renderedVirtualItemCount()} matchedItems=${filteredItems().length} totalItems=${loadedItems.length} columns=${columnCount()} rowHeight=${rowHeight()} elapsedMs=${Math.round(performance.now() - startMs)}`);
+      if (newLoadId !== activeLoadId) return;
+      logPerformance(`DatasetGrid initial render complete: loadId=${newLoadId} renderedItems=${renderedVirtualItemCount()} filteredItems=${filteredTotal} totalItems=${totalItems} columns=${columnCount()} rowHeight=${rowHeight()} elapsedMs=${Math.round(performance.now() - startMs)}`);
     } catch (err) {
-      if (loadId !== activeLoadId) return;
+      if (newLoadId !== activeLoadId) return;
       loadError = err instanceof Error ? err.message : String(err);
-      loadedItems = [];
       isLoadingDataset = false;
       loadProgress = null;
-      logPerformance(`DatasetGrid reload failed: loadId=${loadId} elapsedMs=${Math.round(performance.now() - startMs)} error=${loadError}`);
+      logPerformance(`DatasetGrid reload failed: loadId=${newLoadId} elapsedMs=${Math.round(performance.now() - startMs)} error=${loadError}`);
     }
   }
 
   async function handleDelete(itemToDelete: DatasetItem) {
-    const itemToDeleteKey = datasetItemKey(itemToDelete);
-    const index = loadedItems.findIndex((x) => datasetItemKey(x) === itemToDeleteKey);
-    if (index === -1) {
-      console.error(`Item not found: ${itemToDelete.name}`);
-      return;
-    }
-
     try {
-      await deleteItem(dataset, loadedItems[index]);
-      loadedItems.splice(index, 1);
+      const baseName = getItemBaseName(itemToDelete.name);
+      const ext = getItemImageExt(itemToDelete);
+      await invoke("delete_dataset_item", {
+        imagesDir: itemToDelete.imagesDir,
+        labelsDir: itemToDelete.labelsDir,
+        name: baseName,
+        imageExt: ext,
+      });
+      if (loadId) {
+        await removeStoredItem(loadId, itemToDelete.name, itemToDelete.imagesDir);
+        totalItems -= 1;
+        await refreshCache(cacheOffset);
+      }
     } catch (err) {
       alert(`Failed to delete ${itemToDelete.name}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   function openEditDialog(item: DatasetItem) {
+    selectedKey = datasetItemKey(item);
     selectedItem = cloneItem(item);
   }
 
   function closeEditDialog() {
-    commitSelectedItem();
+    commitToCache();
     selectedItem = null;
+    selectedKey = null;
   }
 
   onMount(() => {
@@ -306,6 +359,9 @@
       if (pendingScrollAnimation) {
         cancelAnimationFrame(pendingScrollAnimation);
         pendingScrollAnimation = 0;
+      }
+      if (loadId) {
+        void clearStoredDataset(loadId);
       }
     };
   });
@@ -343,11 +399,9 @@
       onclick={async () => {
         try {
           saveAllIsActive = true;
-          await Promise.all(
-            loadedItems
-              .filter((item) => item.hasLabelFile || item.labels.length > 0)
-              .map((item) => resaveLabelsToFile(dataset, item))
-          );
+          if (loadId) {
+            await resaveAllLabels(loadId);
+          }
         } catch (err) {
           alert(`Failed to save all changes: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
@@ -390,7 +444,7 @@
       <input
         type="text"
         bind:value={filterClassId}
-        oninput={resetScrollPosition}
+        oninput={applyFilter}
         placeholder="0"
         class="w-12 bg-zinc-800 border border-zinc-600 rounded px-1 text-center"
       />
@@ -407,7 +461,7 @@
         type="number"
         min="1"
         bind:value={filterNthValue}
-        oninput={resetScrollPosition}
+        oninput={applyFilter}
         placeholder="1"
         class="w-12 bg-zinc-800 border border-zinc-600 rounded px-1 text-center"
       />
@@ -417,7 +471,7 @@
       {#if isLoadingDataset}
         {loadProgressText()}
       {:else}
-        Rendering {renderedVirtualItemCount()} / {filteredItems().length} matched / {loadedItems.length} total
+        Rendering {renderedVirtualItemCount()} / {filteredTotal} matched / {totalItems} total
       {/if}
     </span>
   </div>
@@ -452,7 +506,7 @@
       <div class="p-4 text-red-400">
         Failed to load dataset: {loadError}
       </div>
-    {:else if filteredItems().length === 0}
+    {:else if filteredTotal === 0}
       <div class="h-full grid place-content-center text-zinc-500">
         No items match the current filter.
       </div>

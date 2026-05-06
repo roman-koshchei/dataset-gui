@@ -69,11 +69,11 @@
   });
 
   async function handleClose() {
+    onClose();
+    selectedLabelIndex = -1;
     if (hasUnsavedChanges && saveStatus !== "saving") {
       await performSave();
     }
-    onClose();
-    selectedLabelIndex = -1;
   }
 
   async function navigate(callback: () => void) {
@@ -318,14 +318,14 @@
       <div class="flex gap-2">
         <button
           class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
-          onclick={() => onPrev?.()}
+          onclick={() => navigate(() => onPrev?.())}
           disabled={!onPrev}
         >
           Prev
         </button>
         <button
           class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
-          onclick={() => onNext?.()}
+          onclick={() => navigate(() => onNext?.())}
           disabled={!onNext}
         >
           Next
@@ -351,6 +351,7 @@
             (v) => {
               if (isSelectedLabelIndexValid()) {
                 item.labels[selectedLabelIndex].classId = v ?? 0;
+                hasUnsavedChanges = true;
               }
             }
           }
@@ -373,6 +374,7 @@
               (v) => {
                 if (isSelectedLabelIndexValid()) {
                   item.labels[selectedLabelIndex].top = v ?? 0;
+                  hasUnsavedChanges = true;
                 }
               }
             }
@@ -396,6 +398,7 @@
               (v) => {
                 if (isSelectedLabelIndexValid()) {
                   item.labels[selectedLabelIndex].left = v ?? 0;
+                  hasUnsavedChanges = true;
                 }
               }
             }
@@ -419,6 +422,7 @@
               (v) => {
                 if (isSelectedLabelIndexValid()) {
                   item.labels[selectedLabelIndex].width = v ?? 0;
+                  hasUnsavedChanges = true;
                 }
               }
             }
@@ -442,6 +446,7 @@
               (v) => {
                 if (isSelectedLabelIndexValid()) {
                   item.labels[selectedLabelIndex].height = v ?? 0;
+                  hasUnsavedChanges = true;
                 }
               }
             }
