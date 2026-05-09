@@ -6,7 +6,7 @@
     type Dataset,
     type DatasetItem,
   } from "./dataset";
-  import { numberToTailwindBg, numberToTailwindBorder } from "./helpers";
+  import { numberToTailwindBg, numberToTailwindBorder, numberToOutlineColor } from "./helpers";
   import ResizeHandles from "$lib/ResizeHandles.svelte";
 
   let {
@@ -35,6 +35,7 @@
   let panX = $state(0);
   let panY = $state(0);
   let isPanning = $state(false);
+  let spaceHeld = $state(false);
   let panStartMouseX = 0;
   let panStartMouseY = 0;
   let panStartPanX = 0;
@@ -52,6 +53,10 @@
   let dragStartY = 0;
 
   let dragStartLabel = { left: 0, top: 0, width: 0, height: 0 };
+
+  let clipboard: { left: number; top: number; width: number; height: number; classId: number } | null = null;
+  let lastMouseNormX = -1;
+  let lastMouseNormY = -1;
 
   $effect(() => {
     if (!dialog) return;
@@ -94,7 +99,7 @@
     };
 
     const onMouseDown = (e: MouseEvent) => {
-      if (e.button === 1 || (e.button === 0 && e.ctrlKey)) {
+      if (e.button === 1 || (e.button === 0 && (e.ctrlKey || spaceHeld))) {
         e.preventDefault();
         e.stopPropagation();
         isPanning = true;
@@ -199,6 +204,12 @@
   }
 
   function handleMouseMove(e: MouseEvent) {
+    if (imageContainer) {
+      const r = imageContainer.getBoundingClientRect();
+      lastMouseNormX = (e.clientX - r.left) / r.width;
+      lastMouseNormY = (e.clientY - r.top) / r.height;
+    }
+
     if (isPanning) {
       panX = panStartPanX + (e.clientX - panStartMouseX);
       panY = panStartPanY + (e.clientY - panStartMouseY);
@@ -335,14 +346,18 @@
   }
 </script>
 
-<svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} />
+<svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} onkeydown={(e) => {
+  if (e.code === 'Space' && !e.repeat) { e.preventDefault(); spaceHeld = true; }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'c' && isSelectedLabelIndexValid() && item) { clipboard = { ...item.labels[selectedLabelIndex] }; }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard && item) { e.preventDefault(); const cx = (lastMouseNormX >= 0 && lastMouseNormX <= 1 && lastMouseNormY >= 0 && lastMouseNormY <= 1) ? Math.max(0, Math.min(1 - clipboard.width, lastMouseNormX - clipboard.width / 2)) : Math.min(clipboard.left + 0.02, 1 - clipboard.width); const cy = (lastMouseNormX >= 0 && lastMouseNormX <= 1 && lastMouseNormY >= 0 && lastMouseNormY <= 1) ? Math.max(0, Math.min(1 - clipboard.height, lastMouseNormY - clipboard.height / 2)) : Math.min(clipboard.top + 0.02, 1 - clipboard.height); item.labels.push({ ...clipboard, left: cx, top: cy }); selectedLabelIndex = item.labels.length - 1; hasUnsavedChanges = true; }
+}} onkeyup={(e) => { if (e.code === 'Space') spaceHeld = false; }} />
 
 <dialog
   bind:this={dialog}
   class="hidden open:grid grid-cols-[1fr_20rem] h-full w-full outline-none m-auto border border-zinc-700 bg-zinc-900 backdrop:bg-zinc-900/75"
 >
   {#if item}
-    <div bind:this={viewportEl} class="h-full w-full overflow-hidden relative">
+    <div bind:this={viewportEl} class="h-full w-full overflow-hidden relative" style="cursor: {isPanning ? 'grabbing' : spaceHeld ? 'grab' : 'default'}">
       <div
         bind:this={imageContainer}
         class="relative"
@@ -373,14 +388,14 @@
             aria-label={`Bounding box ${labelIndex}`}
             class={[
               "absolute",
-              numberToTailwindBorder(label.classId),
               numberToTailwindBg(label.classId),
-              selectedLabelIndex === labelIndex ? "border-2" : "border",
+              selectedLabelIndex === labelIndex ? "outline outline-2" : "outline outline-1",
             ]}
             style:left={`${label.left * 100}%`}
             style:top={`${label.top * 100}%`}
             style:width={`${label.width * 100}%`}
             style:height={`${label.height * 100}%`}
+            style:outline-color={numberToOutlineColor(label.classId)}
             onmousedown={(e) => handleMouseDown(e, labelIndex)}
             onclick={(e) => e.stopPropagation()}
           >
