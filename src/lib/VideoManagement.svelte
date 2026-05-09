@@ -809,7 +809,7 @@
                               e.stopPropagation();
                               const fDir = segmentFramesDir(video, seg)!;
                               const lDir = segmentLabelsDir(video, seg)!;
-                              openDatasetInNewTab!({ imagesDir: fDir, labelsDir: lDir }, `${getVideoId(video)}-${segmentToFolderName(seg)}`);
+                              openDatasetInNewTab!({ dirs: [{ imagesDir: fDir, labelsDir: lDir }] }, `${getVideoId(video)}-${segmentToFolderName(seg)}`);
                             }}
                           >
                             dataset

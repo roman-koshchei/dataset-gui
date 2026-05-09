@@ -3,8 +3,9 @@
   import DatasetGrid from "./DatasetGrid.svelte";
   import VideoManagement from "./VideoManagement.svelte";
   import { emptyVideoCollection } from "./video-collection";
-  import { writeTextFile } from "@tauri-apps/plugin-fs";
+  import { writeTextFile, exists } from "@tauri-apps/plugin-fs";
   import { load } from "@tauri-apps/plugin-store";
+  import { open } from "@tauri-apps/plugin-dialog";
   import type { Dataset } from "./dataset";
 
   let {
@@ -33,8 +34,9 @@
     initialDatasetApplied = true;
     viewMode = "dataset";
     dataset = initialState;
-    if ("imagesDir" in initialState) {
-      void pushToHistory(initialState.imagesDir, initialState.labelsDir);
+    if (initialState.dirs.length === 1) {
+      const dir = initialState.dirs[0];
+      void pushToHistory(dir.imagesDir, dir.labelsDir);
     }
   });
 
@@ -42,16 +44,6 @@
   async function getStore() {
     if (!store) store = await load("store.json");
     return store;
-  }
-
-  async function loadVideoPath() {
-    try {
-      const s = await getStore();
-      const saved = await s.get<string>("videoDataPath");
-      if (saved) videoDataPath = saved;
-      const savedDir = await s.get<string>("videosDir");
-      if (savedDir) videosDir = savedDir;
-    } catch { }
   }
 
   async function saveVideoPath() {
@@ -62,8 +54,6 @@
       await s.save();
     } catch { }
   }
-
-  void loadVideoPath();
 
   let imagesDir = $state("");
   let labelsDir = $state("");
@@ -76,7 +66,7 @@
 
     datasetError = "";
     try {
-      dataset = { imagesDir, labelsDir };
+      dataset = { dirs: [{ imagesDir, labelsDir }] };
       viewMode = "dataset";
       await pushToHistory(imagesDir, labelsDir);
     } catch (err) {
@@ -86,19 +76,23 @@
   }
 
   async function createNewCollection() {
-    if (!videoDataPath.trim()) {
-      videoError = "Specify a data.json path for the new collection";
-      return;
-    }
-    if (!videoDataPath.endsWith("data.json")) {
-      videoError = "Path must end with data.json";
-      return;
-    }
-    videoError = "";
     try {
+      const selected = await open({ directory: true, title: "Select folder for new collection" });
+      if (!selected) return;
+
+      const folder = typeof selected === "string" ? selected : selected[0];
+      const dataPath = folder.replace(/[/\\]?$/, "") + "/data.json";
+      const folderName = folder.replace(/[/\\]/g, "/").split("/").pop() || "";
+
+      if (await exists(dataPath)) {
+        videoError = "data.json already exists in this folder. Use 'Manage Videos' to open it.";
+        return;
+      }
+
       const collection = emptyVideoCollection();
-      collection.collection = videoDataPath.replace(/[/\\]data\.json$/, "").split(/[/\\]/).pop() || "";
-      await writeTextFile(videoDataPath, JSON.stringify(collection, null, 2) + "\n");
+      collection.collection = folderName;
+      await writeTextFile(dataPath, JSON.stringify(collection, null, 2) + "\n");
+      videoDataPath = dataPath;
       await saveVideoPath();
       await pushToVideoHistory(videoDataPath, videosDir);
       viewMode = "videos";

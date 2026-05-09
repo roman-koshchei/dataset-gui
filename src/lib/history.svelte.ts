@@ -1,7 +1,7 @@
 import { load } from "@tauri-apps/plugin-store";
-import type { SingleDataset } from "./dataset";
+import type { DatasetDir } from "./dataset";
 
-export const history = $state<{ items: SingleDataset[] }>({ items: [] });
+export const history = $state<{ items: DatasetDir[] }>({ items: [] });
 export type VideoHistoryEntry = { dataPath: string; videosDir: string };
 
 export const videoHistory = $state<{ items: VideoHistoryEntry[] }>({ items: [] });
@@ -17,15 +17,15 @@ async function getStore() {
   return store;
 }
 
-export async function loadHistory(): Promise<SingleDataset[]> {
+export async function loadHistory(): Promise<DatasetDir[]> {
   const s = await getStore();
-  return (await s.get<SingleDataset[]>(HISTORY_KEY)) ?? [];
+  return (await s.get<DatasetDir[]>(HISTORY_KEY)) ?? [];
 }
 
 export async function pushToHistory(imagesDir: string, labelsDir: string) {
   const s = await getStore();
-  const current = (await s.get<SingleDataset[]>(HISTORY_KEY)) ?? [];
-  const dataset: SingleDataset = { imagesDir, labelsDir };
+  const current = (await s.get<DatasetDir[]>(HISTORY_KEY)) ?? [];
+  const dataset: DatasetDir = { imagesDir, labelsDir };
 
   const filteredCurrent = current.filter(
     (x) => !(x.imagesDir === imagesDir && x.labelsDir === labelsDir)
@@ -40,7 +40,7 @@ export async function pushToHistory(imagesDir: string, labelsDir: string) {
 
 export async function removeFromHistory(imagesDir: string, labelsDir: string) {
   const s = await getStore();
-  const current = (await s.get<SingleDataset[]>(HISTORY_KEY)) ?? [];
+  const current = (await s.get<DatasetDir[]>(HISTORY_KEY)) ?? [];
   const newHistory = current.filter(
     (x) => !(x.imagesDir === imagesDir && x.labelsDir === labelsDir)
   );

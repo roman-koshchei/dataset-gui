@@ -18,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost",
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost https://img.youtube.com https://i.ytimg.com; media-src 'self' asset: http://asset.localhost; frame-src https://www.youtube.com",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]

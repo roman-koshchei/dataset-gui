@@ -6,7 +6,7 @@
     type Dataset,
     type DatasetItem,
   } from "./dataset";
-  import { numberToTailwindBg, numberToTailwindBorder } from "./helpers";
+  import { numberToTailwindBg, numberToTailwindBorder, numberToOutlineColor } from "./helpers";
   import ResizeHandles from "$lib/ResizeHandles.svelte";
 
   let {
@@ -29,9 +29,17 @@
   let saveStatus = $state<"saving" | "saved" | "error" | null>(null);
 
   let imageContainer = $state<HTMLDivElement | undefined>(undefined);
-  let imageContainerRect = $derived(
-    imageContainer ? imageContainer.getBoundingClientRect() : null
-  );
+  let imgEl = $state<HTMLImageElement | undefined>(undefined);
+  let viewportEl = $state<HTMLDivElement | undefined>(undefined);
+  let zoom = $state(1);
+  let panX = $state(0);
+  let panY = $state(0);
+  let isPanning = $state(false);
+  let spaceHeld = $state(false);
+  let panStartMouseX = 0;
+  let panStartMouseY = 0;
+  let panStartPanX = 0;
+  let panStartPanY = 0;
 
   // UI doesn't need reactive updates for those
   let mouseAction:
@@ -46,11 +54,17 @@
 
   let dragStartLabel = { left: 0, top: 0, width: 0, height: 0 };
 
+  let clipboard: { left: number; top: number; width: number; height: number; classId: number } | null = null;
+  let lastMouseNormX = -1;
+  let lastMouseNormY = -1;
+
   $effect(() => {
     if (!dialog) return;
 
     if (item != null) {
-      dialog.showModal();
+      if (!dialog.open) {
+        dialog.showModal();
+      }
     } else {
       dialog.close();
     }
@@ -66,12 +80,59 @@
     return () => clearInterval(autosaveInterval);
   });
 
+  $effect(() => {
+    const v = viewportEl;
+    if (!v) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (!imageContainer) return;
+      const vr = v.getBoundingClientRect();
+      const mouseX = e.clientX - vr.left;
+      const mouseY = e.clientY - vr.top;
+      const oldZoom = zoom;
+      const factor = e.deltaY > 0 ? 0.9 : 1 / 0.9;
+      const newZoom = Math.max(0.5, Math.min(20, zoom * factor));
+      panX = mouseX - (mouseX - panX) * (newZoom / oldZoom);
+      panY = mouseY - (mouseY - panY) * (newZoom / oldZoom);
+      zoom = newZoom;
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 1 || (e.button === 0 && (e.ctrlKey || spaceHeld))) {
+        e.preventDefault();
+        e.stopPropagation();
+        isPanning = true;
+        panStartMouseX = e.clientX;
+        panStartMouseY = e.clientY;
+        panStartPanX = panX;
+        panStartPanY = panY;
+      }
+    };
+
+    v.addEventListener("wheel", onWheel, { passive: false });
+    v.addEventListener("mousedown", onMouseDown, true);
+    return () => {
+      v.removeEventListener("wheel", onWheel);
+      v.removeEventListener("mousedown", onMouseDown, true);
+    };
+  });
+
+  $effect(() => {
+    if (item) {
+      zoom = 1;
+      panX = 0;
+      panY = 0;
+      requestAnimationFrame(centerImage);
+    }
+  });
+
   async function handleClose() {
+    onClose();
+    selectedLabelIndex = -1;
     if (hasUnsavedChanges && saveStatus !== "saving") {
       await performSave();
     }
-    onClose();
-    selectedLabelIndex = -1;
   }
 
   async function navigate(callback: () => void) {
@@ -98,6 +159,23 @@
     }
   }
 
+  function centerImage() {
+    requestAnimationFrame(() => {
+      if (!viewportEl || !imageContainer) return;
+      const vr = viewportEl.getBoundingClientRect();
+      const iw = imageContainer.offsetWidth;
+      const ih = imageContainer.offsetHeight;
+      if (iw === 0 || ih === 0) return;
+      panX = (vr.width - iw * zoom) / 2;
+      panY = (vr.height - ih * zoom) / 2;
+    });
+  }
+
+  function resetView() {
+    zoom = 1;
+    centerImage();
+  }
+
   function isSelectedLabelIndexValid() {
     if (!item) return false;
     return selectedLabelIndex >= 0 && selectedLabelIndex < item.labels.length;
@@ -106,15 +184,14 @@
   function handleMouseDown(e: MouseEvent, labelIndex: number, handle?: string) {
     selectedLabelIndex = labelIndex;
 
-    if (!imageContainerRect || !item) return;
+    if (!imageContainer || !item) return;
 
     e.stopPropagation();
     e.preventDefault();
 
-    dragStartX =
-      (e.clientX - imageContainerRect.left) / imageContainerRect.width;
-    dragStartY =
-      (e.clientY - imageContainerRect.top) / imageContainerRect.height;
+    const rect = imageContainer.getBoundingClientRect();
+    dragStartX = (e.clientX - rect.left) / rect.width;
+    dragStartY = (e.clientY - rect.top) / rect.height;
 
     const label = item.labels[labelIndex];
     dragStartLabel = { ...label };
@@ -127,8 +204,20 @@
   }
 
   function handleMouseMove(e: MouseEvent) {
+    if (imageContainer) {
+      const r = imageContainer.getBoundingClientRect();
+      lastMouseNormX = (e.clientX - r.left) / r.width;
+      lastMouseNormY = (e.clientY - r.top) / r.height;
+    }
+
+    if (isPanning) {
+      panX = panStartPanX + (e.clientX - panStartMouseX);
+      panY = panStartPanY + (e.clientY - panStartMouseY);
+      return;
+    }
+
     if (
-      !imageContainerRect ||
+      !imageContainer ||
       !item ||
       !mouseAction ||
       !isSelectedLabelIndexValid()
@@ -136,10 +225,9 @@
       return;
     }
 
-    const currentX =
-      (e.clientX - imageContainerRect.left) / imageContainerRect.width;
-    const currentY =
-      (e.clientY - imageContainerRect.top) / imageContainerRect.height;
+    const rect = imageContainer.getBoundingClientRect();
+    const currentX = (e.clientX - rect.left) / rect.width;
+    const currentY = (e.clientY - rect.top) / rect.height;
 
     const deltaX = currentX - dragStartX;
     const deltaY = currentY - dragStartY;
@@ -247,6 +335,10 @@
   }
 
   function handleMouseUp() {
+    if (isPanning) {
+      isPanning = false;
+      return;
+    }
     if (mouseAction !== null) {
       hasUnsavedChanges = true;
     }
@@ -254,17 +346,22 @@
   }
 </script>
 
-<svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} />
+<svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} onkeydown={(e) => {
+  if (e.code === 'Space' && !e.repeat) { e.preventDefault(); spaceHeld = true; }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'c' && isSelectedLabelIndexValid() && item) { clipboard = { ...item.labels[selectedLabelIndex] }; }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard && item) { e.preventDefault(); const cx = (lastMouseNormX >= 0 && lastMouseNormX <= 1 && lastMouseNormY >= 0 && lastMouseNormY <= 1) ? Math.max(0, Math.min(1 - clipboard.width, lastMouseNormX - clipboard.width / 2)) : Math.min(clipboard.left + 0.02, 1 - clipboard.width); const cy = (lastMouseNormX >= 0 && lastMouseNormX <= 1 && lastMouseNormY >= 0 && lastMouseNormY <= 1) ? Math.max(0, Math.min(1 - clipboard.height, lastMouseNormY - clipboard.height / 2)) : Math.min(clipboard.top + 0.02, 1 - clipboard.height); item.labels.push({ ...clipboard, left: cx, top: cy }); selectedLabelIndex = item.labels.length - 1; hasUnsavedChanges = true; }
+}} onkeyup={(e) => { if (e.code === 'Space') spaceHeld = false; }} />
 
 <dialog
   bind:this={dialog}
   class="hidden open:grid grid-cols-[1fr_20rem] h-full w-full outline-none m-auto border border-zinc-700 bg-zinc-900 backdrop:bg-zinc-900/75"
 >
   {#if item}
-    <div class="h-full w-full flex justify-center items-center overflow-hidden">
+    <div bind:this={viewportEl} class="h-full w-full overflow-hidden relative" style="cursor: {isPanning ? 'grabbing' : spaceHeld ? 'grab' : 'default'}">
       <div
         bind:this={imageContainer}
-        class="relative h-fit bg-amber-100/20 w-auto"
+        class="relative"
+        style="transform-origin: 0 0; transform: translate({panX}px, {panY}px) scale({zoom})"
       >
         <button
           type="button"
@@ -277,10 +374,12 @@
           }}
         >
           <img
+            bind:this={imgEl}
             class="w-full h-full max-h-[95vh] object-contain pointer-events-none"
             src={item.imageSrc}
             alt=""
             loading="lazy"
+            onload={centerImage}
           />
         </button>
 
@@ -289,14 +388,14 @@
             aria-label={`Bounding box ${labelIndex}`}
             class={[
               "absolute",
-              numberToTailwindBorder(label.classId),
               numberToTailwindBg(label.classId),
-              selectedLabelIndex === labelIndex ? "border-2" : "border",
+              selectedLabelIndex === labelIndex ? "outline outline-2" : "outline outline-1",
             ]}
             style:left={`${label.left * 100}%`}
             style:top={`${label.top * 100}%`}
             style:width={`${label.width * 100}%`}
             style:height={`${label.height * 100}%`}
+            style:outline-color={numberToOutlineColor(label.classId)}
             onmousedown={(e) => handleMouseDown(e, labelIndex)}
             onclick={(e) => e.stopPropagation()}
           >
@@ -313,17 +412,17 @@
     </div>
 
     <div class="bg-zinc-900 p-5 border-l border-zinc-700 space-y-3">
-      <div class="flex gap-2">
+      <div class="flex gap-2 items-center">
         <button
           class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
-          onclick={() => onPrev?.()}
+          onclick={() => navigate(() => onPrev?.())}
           disabled={!onPrev}
         >
           Prev
         </button>
         <button
           class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
-          onclick={() => onNext?.()}
+          onclick={() => navigate(() => onNext?.())}
           disabled={!onNext}
         >
           Next
@@ -333,6 +432,35 @@
           onclick={handleClose}
         >
           Close
+        </button>
+        <span class="ml-auto text-sm text-zinc-400">Labels: {item.labels.length}</span>
+      </div>
+
+      <div class="flex gap-2 items-center text-white">
+        <button
+          class="py-1 px-2.5 bg-zinc-700 hover:bg-zinc-600 text-white"
+          onclick={() => {
+            zoom = Math.max(0.5, zoom / 1.3);
+            centerImage();
+          }}
+        >
+          &minus;
+        </button>
+        <span class="text-sm w-14 text-center">{Math.round(zoom * 100)}%</span>
+        <button
+          class="py-1 px-2.5 bg-zinc-700 hover:bg-zinc-600 text-white"
+          onclick={() => {
+            zoom = Math.min(20, zoom * 1.3);
+            centerImage();
+          }}
+        >
+          +
+        </button>
+        <button
+          class="py-1 px-2.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm"
+          onclick={resetView}
+        >
+          Fit
         </button>
       </div>
 
@@ -349,6 +477,7 @@
             (v) => {
               if (isSelectedLabelIndexValid()) {
                 item.labels[selectedLabelIndex].classId = v ?? 0;
+                hasUnsavedChanges = true;
               }
             }
           }
@@ -371,6 +500,7 @@
               (v) => {
                 if (isSelectedLabelIndexValid()) {
                   item.labels[selectedLabelIndex].top = v ?? 0;
+                  hasUnsavedChanges = true;
                 }
               }
             }
@@ -394,6 +524,7 @@
               (v) => {
                 if (isSelectedLabelIndexValid()) {
                   item.labels[selectedLabelIndex].left = v ?? 0;
+                  hasUnsavedChanges = true;
                 }
               }
             }
@@ -406,6 +537,11 @@
 
         <label class="block text-white">
           Width
+          {#if isSelectedLabelIndexValid() && imgEl?.naturalWidth}
+            <span class="text-zinc-500 text-xs">
+              ({Math.round(item.labels[selectedLabelIndex].width * imgEl.naturalWidth)}px)
+            </span>
+          {/if}
           <input
             type="number"
             class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
@@ -417,6 +553,7 @@
               (v) => {
                 if (isSelectedLabelIndexValid()) {
                   item.labels[selectedLabelIndex].width = v ?? 0;
+                  hasUnsavedChanges = true;
                 }
               }
             }
@@ -429,6 +566,11 @@
 
         <label class="block text-white">
           Height
+          {#if isSelectedLabelIndexValid() && imgEl?.naturalHeight}
+            <span class="text-zinc-500 text-xs">
+              ({Math.round(item.labels[selectedLabelIndex].height * imgEl.naturalHeight)}px)
+            </span>
+          {/if}
           <input
             type="number"
             class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
@@ -440,6 +582,7 @@
               (v) => {
                 if (isSelectedLabelIndexValid()) {
                   item.labels[selectedLabelIndex].height = v ?? 0;
+                  hasUnsavedChanges = true;
                 }
               }
             }
