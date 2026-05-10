@@ -26,6 +26,17 @@
     initial: VideoMask;
   };
 
+  const maskResizeHandles = [
+    { position: "tl", classes: "-left-3 -top-3 cursor-nw-resize", label: "Resize top-left" },
+    { position: "tr", classes: "-right-3 -top-3 cursor-ne-resize", label: "Resize top-right" },
+    { position: "bl", classes: "-left-3 -bottom-3 cursor-sw-resize", label: "Resize bottom-left" },
+    { position: "br", classes: "-right-3 -bottom-3 cursor-se-resize", label: "Resize bottom-right" },
+    { position: "t", classes: "left-1/2 -translate-x-1/2 -top-3 cursor-n-resize", label: "Resize top" },
+    { position: "b", classes: "left-1/2 -translate-x-1/2 -bottom-3 cursor-s-resize", label: "Resize bottom" },
+    { position: "l", classes: "-left-3 top-1/2 -translate-y-1/2 cursor-w-resize", label: "Resize left" },
+    { position: "r", classes: "-right-3 top-1/2 -translate-y-1/2 cursor-e-resize", label: "Resize right" },
+  ];
+
   function clamp(value: number, min = 0, max = 1): number {
     return Math.max(min, Math.min(max, value));
   }
@@ -762,7 +773,7 @@
       {#if showMasks}
         {#each visibleMasks as { mask, index }}
           <div
-            class="absolute bg-black cursor-move {selectedMaskIndex === index ? 'ring-2 ring-white' : 'ring-1 ring-white/40'}"
+            class="absolute bg-black/70 cursor-move"
             style="left: {mask.left * 100}%; top: {mask.top * 100}%; width: {mask.width * 100}%; height: {mask.height * 100}%;"
             role="button"
             tabindex="-1"
@@ -770,13 +781,13 @@
             onmousedown={(e) => startMaskDrag(e, index, "move")}
           >
             {#if selectedMaskIndex === index}
-              {#each ["tl", "tr", "bl", "br"] as handle}
+              {#each maskResizeHandles as handle}
                 <div
-                  class="absolute h-3 w-3 rounded-sm border border-white bg-zinc-900 {handle === 'tl' ? '-left-1.5 -top-1.5 cursor-nw-resize' : handle === 'tr' ? '-right-1.5 -top-1.5 cursor-ne-resize' : handle === 'bl' ? '-left-1.5 -bottom-1.5 cursor-sw-resize' : '-right-1.5 -bottom-1.5 cursor-se-resize'}"
+                  class="absolute h-3 w-3 rounded-md border-2 border-white bg-zinc-900 {handle.classes}"
                   role="button"
                   tabindex="-1"
-                  aria-label={`Resize mask ${handle}`}
-                  onmousedown={(e) => startMaskDrag(e, index, "resize", handle)}
+                  aria-label={handle.label}
+                  onmousedown={(e) => startMaskDrag(e, index, "resize", handle.position)}
                 ></div>
               {/each}
             {/if}
@@ -862,6 +873,12 @@
         <span class="text-xs text-zinc-500">
           Selected: {selectedMask.segment ? `${selectedMask.segment[0]}-${selectedMask.segment[1]}` : "whole video"}
         </span>
+        <button
+          class="px-2 py-1 text-xs bg-zinc-700 text-zinc-300 hover:bg-zinc-600"
+          onclick={() => selectedMaskIndex = -1}
+        >
+          Unselect
+        </button>
         <button
           class="px-2 py-1 text-xs bg-red-900/70 text-red-300 hover:bg-red-900"
           onclick={() => removeMask(selectedMaskIndex)}
