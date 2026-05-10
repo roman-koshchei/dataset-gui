@@ -1,9 +1,18 @@
+export type VideoMask = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  segment?: string[];
+};
+
 export type VideoEntry = {
   url?: string;
   file?: string;
   file_path?: string;
   tags: string[];
   keep_segments?: string[][];
+  masks?: VideoMask[];
 };
 
 export type VideoCollection = {

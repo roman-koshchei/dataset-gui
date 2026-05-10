@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { VideoCollection, VideoEntry } from "./video-collection";
+  import type { VideoCollection, VideoEntry, VideoMask } from "./video-collection";
   import { extractYouTubeId, extractVideoId, extractFileStem, findLocalVideo, segmentsMatchFolders, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
   import { writeTextFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
   import { invoke } from "@tauri-apps/api/core";
@@ -677,12 +677,17 @@
                <VideoPlayer
                  filePath={resolvedFilePath(video) ?? ""}
                  youtubeUrl={video.url ?? ""}
-                 segments={video.keep_segments ?? []}
-                 highlightedSegmentIndex={highlightedSegIndex}
-                 onSegmentHover={(i) => highlightedSegIndex = i}
-                    onSegmentsChange={(segs) => {
-                    const seen = new Set<string>();
-                   video.keep_segments = segs.filter(s => {
+                  segments={video.keep_segments ?? []}
+                  masks={video.masks ?? []}
+                  highlightedSegmentIndex={highlightedSegIndex}
+                  onSegmentHover={(i) => highlightedSegIndex = i}
+                  onMasksChange={(masks: VideoMask[]) => {
+                    video.masks = masks;
+                    hasUnsaved = true;
+                  }}
+                  onSegmentsChange={(segs) => {
+                     const seen = new Set<string>();
+                    video.keep_segments = segs.filter(s => {
                      const key = `${s[0]}|${s[1]}`;
                      if (seen.has(key)) return false;
                      seen.add(key);

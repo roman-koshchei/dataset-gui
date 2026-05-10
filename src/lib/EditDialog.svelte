@@ -2,7 +2,6 @@
   import {
     normArea,
     resaveLabelsToFile,
-    datasetLabelKey,
     type Dataset,
     type DatasetItem,
   } from "./dataset";
@@ -383,7 +382,7 @@
           />
         </button>
 
-        {#each item.labels as label, labelIndex (datasetLabelKey(label))}
+        {#each item.labels as label, labelIndex}
           <button
             aria-label={`Bounding box ${labelIndex}`}
             class={[

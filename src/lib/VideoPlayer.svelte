@@ -1,6 +1,7 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { buildYouTubeEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
+  import type { VideoMask } from "./video-collection";
   import { numberToAccentPalette } from "./helpers";
 
   type ZoomRange = {
@@ -15,6 +16,35 @@
     start: number;
     end: number;
   };
+
+  type MaskDrag = {
+    index: number;
+    mode: "move" | "resize";
+    handle: string;
+    startX: number;
+    startY: number;
+    initial: VideoMask;
+  };
+
+  function clamp(value: number, min = 0, max = 1): number {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function sameSegment(a?: string[], b?: string[]): boolean {
+    return (a?.[0] ?? "") === (b?.[0] ?? "") && (a?.[1] ?? "") === (b?.[1] ?? "");
+  }
+
+  function normalizeMask(mask: VideoMask): VideoMask {
+    const width = clamp(mask.width, 0.01, 1);
+    const height = clamp(mask.height, 0.01, 1);
+    return {
+      ...mask,
+      width,
+      height,
+      left: clamp(mask.left, 0, 1 - width),
+      top: clamp(mask.top, 0, 1 - height),
+    };
+  }
 
   function clampRange(start: number, end: number): ZoomRange {
     return {
@@ -251,25 +281,33 @@
     filePath,
     youtubeUrl = "",
     segments = [],
+    masks = [],
     onSegmentsChange,
+    onMasksChange,
     onSegmentHover,
     highlightedSegmentIndex = -1,
   }: {
     filePath: string;
     youtubeUrl?: string;
     segments?: string[][];
+    masks?: VideoMask[];
     onSegmentsChange: (segments: string[][]) => void;
+    onMasksChange?: (masks: VideoMask[]) => void;
     onSegmentHover?: (index: number) => void;
     highlightedSegmentIndex?: number;
   } = $props();
 
   let videoEl: HTMLVideoElement | undefined = $state();
+  let videoFrameEl: HTMLDivElement | undefined = $state();
   let currentTime = $state(0);
   let duration = $state(0);
   let playing = $state(false);
   let timelineEl: HTMLDivElement | undefined = $state();
   let videoError = $state("");
   let playbackRate = $state(1);
+  let showMasks = $state(true);
+  let selectedMaskIndex = $state(-1);
+  let maskDrag: MaskDrag | null = $state(null);
 
   let markIn: number | null = $state(null);
   let dragging = $state(false);
@@ -340,6 +378,12 @@
 
   let activeSegment = $derived(
     parsedSegments.find(seg => currentTime >= seg.start && currentTime <= seg.end)?.index ?? -1
+  );
+
+  let visibleMasks = $derived(
+    masks
+      .map((mask, index) => ({ mask: normalizeMask(mask), index }))
+      .filter(({ mask }) => !mask.segment || parsedSegments.some(seg => seg.index === activeSegment && sameSegment(mask.segment, segments[seg.index])))
   );
 
   let isTimelineInteracting = $derived(
@@ -440,6 +484,82 @@
 
   function removeSegment(index: number) {
     onSegmentsChange(removeSegmentAt(segments, index));
+  }
+
+  function updateMasks(nextMasks: VideoMask[]) {
+    onMasksChange?.(nextMasks.map(normalizeMask));
+  }
+
+  function addMask(segmentScoped: boolean) {
+    const active = activeSegment >= 0 ? segments[activeSegment] : undefined;
+    const next: VideoMask = {
+      left: 0.35,
+      top: 0.35,
+      width: 0.3,
+      height: 0.18,
+      ...(segmentScoped && active ? { segment: [...active] } : {}),
+    };
+    updateMasks([...masks, next]);
+    selectedMaskIndex = masks.length;
+    showMasks = true;
+  }
+
+  function removeMask(index: number) {
+    updateMasks(masks.filter((_, i) => i !== index));
+    selectedMaskIndex = -1;
+  }
+
+  function videoFramePoint(e: MouseEvent): { x: number; y: number } {
+    if (!videoFrameEl) return { x: 0, y: 0 };
+    const rect = videoFrameEl.getBoundingClientRect();
+    return {
+      x: clamp((e.clientX - rect.left) / rect.width),
+      y: clamp((e.clientY - rect.top) / rect.height),
+    };
+  }
+
+  function startMaskDrag(e: MouseEvent, index: number, mode: "move" | "resize", handle = "") {
+    e.stopPropagation();
+    e.preventDefault();
+    const point = videoFramePoint(e);
+    selectedMaskIndex = index;
+    maskDrag = { index, mode, handle, startX: point.x, startY: point.y, initial: normalizeMask(masks[index]) };
+  }
+
+  function handleMaskMove(e: MouseEvent) {
+    if (!maskDrag) return;
+    const point = videoFramePoint(e);
+    const dx = point.x - maskDrag.startX;
+    const dy = point.y - maskDrag.startY;
+    const initial = maskDrag.initial;
+    let left = initial.left;
+    let top = initial.top;
+    let width = initial.width;
+    let height = initial.height;
+
+    if (maskDrag.mode === "move") {
+      left = initial.left + dx;
+      top = initial.top + dy;
+    } else {
+      if (maskDrag.handle.includes("l")) {
+        left = initial.left + dx;
+        width = initial.width - dx;
+      }
+      if (maskDrag.handle.includes("r")) width = initial.width + dx;
+      if (maskDrag.handle.includes("t")) {
+        top = initial.top + dy;
+        height = initial.height - dy;
+      }
+      if (maskDrag.handle.includes("b")) height = initial.height + dy;
+    }
+
+    const next = [...masks];
+    next[maskDrag.index] = normalizeMask({ ...initial, left, top, width, height });
+    updateMasks(next);
+  }
+
+  function stopMaskDrag() {
+    maskDrag = null;
   }
 
   function timelineMousePos(e: MouseEvent): number {
@@ -617,11 +737,20 @@
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
   });
+
+  $effect(() => {
+    window.addEventListener("mousemove", handleMaskMove);
+    window.addEventListener("mouseup", stopMaskDrag);
+    return () => {
+      window.removeEventListener("mousemove", handleMaskMove);
+      window.removeEventListener("mouseup", stopMaskDrag);
+    };
+  });
 </script>
 
 {#if videoSrc}
   <div class="space-y-3">
-    <div class="relative bg-black aspect-video max-w-2xl mx-auto">
+    <div bind:this={videoFrameEl} class="relative bg-black aspect-video max-w-2xl mx-auto overflow-hidden">
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
         bind:this={videoEl}
@@ -630,9 +759,33 @@
         onclick={togglePlay}
         ontimeupdate={tick}
       ></video>
+      {#if showMasks}
+        {#each visibleMasks as { mask, index }}
+          <div
+            class="absolute bg-black cursor-move {selectedMaskIndex === index ? 'ring-2 ring-white' : 'ring-1 ring-white/40'}"
+            style="left: {mask.left * 100}%; top: {mask.top * 100}%; width: {mask.width * 100}%; height: {mask.height * 100}%;"
+            role="button"
+            tabindex="-1"
+            aria-label={`Mask rectangle ${index + 1}`}
+            onmousedown={(e) => startMaskDrag(e, index, "move")}
+          >
+            {#if selectedMaskIndex === index}
+              {#each ["tl", "tr", "bl", "br"] as handle}
+                <div
+                  class="absolute h-3 w-3 rounded-sm border border-white bg-zinc-900 {handle === 'tl' ? '-left-1.5 -top-1.5 cursor-nw-resize' : handle === 'tr' ? '-right-1.5 -top-1.5 cursor-ne-resize' : handle === 'bl' ? '-left-1.5 -bottom-1.5 cursor-sw-resize' : '-right-1.5 -bottom-1.5 cursor-se-resize'}"
+                  role="button"
+                  tabindex="-1"
+                  aria-label={`Resize mask ${handle}`}
+                  onmousedown={(e) => startMaskDrag(e, index, "resize", handle)}
+                ></div>
+              {/each}
+            {/if}
+          </div>
+        {/each}
+      {/if}
       {#if !playing && currentTime === 0}
         <button
-          class="absolute inset-0 grid place-content-center text-white/50 text-lg cursor-pointer"
+          class="absolute inset-0 grid place-content-center text-white/50 text-lg cursor-pointer {showMasks && visibleMasks.length > 0 ? 'pointer-events-none' : ''}"
           onclick={togglePlay}
         >
           Play
@@ -680,6 +833,45 @@
           </button>
         {/each}
       </div>
+    </div>
+
+    <div class="flex items-center gap-2 text-sm flex-wrap">
+      <button
+        class="px-3 py-1 {showMasks ? 'bg-zinc-500 text-white' : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'}"
+        onclick={() => showMasks = !showMasks}
+      >
+        {showMasks ? "Hide Masks" : "Show Masks"}
+      </button>
+      <button
+        class="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:text-zinc-500"
+        onclick={() => addMask(false)}
+        disabled={!onMasksChange}
+      >
+        + Whole Video Mask
+      </button>
+      <button
+        class="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:text-zinc-500"
+        onclick={() => addMask(true)}
+        disabled={!onMasksChange || activeSegment < 0}
+        title={activeSegment < 0 ? "Move playhead inside a segment first" : "Add mask only for the active segment"}
+      >
+        + Segment Mask
+      </button>
+      {#if selectedMaskIndex >= 0 && masks[selectedMaskIndex]}
+        {@const selectedMask = masks[selectedMaskIndex]}
+        <span class="text-xs text-zinc-500">
+          Selected: {selectedMask.segment ? `${selectedMask.segment[0]}-${selectedMask.segment[1]}` : "whole video"}
+        </span>
+        <button
+          class="px-2 py-1 text-xs bg-red-900/70 text-red-300 hover:bg-red-900"
+          onclick={() => removeMask(selectedMaskIndex)}
+        >
+          Delete Mask
+        </button>
+      {/if}
+      {#if masks.length > 0}
+        <span class="text-xs text-zinc-500">{visibleMasks.length}/{masks.length} mask{masks.length !== 1 ? 's' : ''} visible</span>
+      {/if}
     </div>
 
     <div

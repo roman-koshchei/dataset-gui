@@ -80,10 +80,6 @@ export function datasetItemKey(item: DatasetItem): string {
   return `${item.imagesDir}\0${item.name}`;
 }
 
-export function datasetLabelKey(label: DatasetLabel): string {
-  return `${label.left},${label.top},${label.left + label.width},${label.top + label.height}`;
-}
-
 function getExtension(filename: string): string {
   const lastDotIndex = filename.lastIndexOf(".");
   if (lastDotIndex === -1) return "";

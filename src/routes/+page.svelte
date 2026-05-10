@@ -36,20 +36,23 @@
     document.title = activeTabId;
   });
 
-  onMount(async () => {
+  onMount(() => {
     initHistory();
 
-    try {
-      const cliArgs = await invoke<{ imagesDir?: string; labelsDir?: string }>("get_cli_args");
-      if (cliArgs.imagesDir && cliArgs.labelsDir) {
-        logPerformance(`CLI dataset open requested: imagesDir=${cliArgs.imagesDir} labelsDir=${cliArgs.labelsDir}`);
-        tabs[0] = {
-          id: tabs[0].id,
-          label: cliArgs.imagesDir.split(/[/\\]/).pop(),
-          initialState: { dirs: [{ imagesDir: cliArgs.imagesDir, labelsDir: cliArgs.labelsDir }] },
-        };
-      }
-    } catch {}
+    void (async () => {
+      try {
+        const cliArgs = await invoke<{ imagesDir?: string; labelsDir?: string }>("get_cli_args");
+        if (cliArgs.imagesDir && cliArgs.labelsDir) {
+          logPerformance(`CLI dataset open requested: imagesDir=${cliArgs.imagesDir} labelsDir=${cliArgs.labelsDir}`);
+          tabs[0] = {
+            id: tabs[0].id,
+            label: cliArgs.imagesDir.split(/[/\\]/).pop(),
+            initialState: { dirs: [{ imagesDir: cliArgs.imagesDir, labelsDir: cliArgs.labelsDir }] },
+          };
+        }
+      } catch {}
+    })();
+
   });
 </script>
 
