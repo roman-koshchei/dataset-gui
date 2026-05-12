@@ -23,7 +23,7 @@
   } = $props();
 
   let dialog: HTMLDialogElement;
-  let selectedLabelIndex = $state(-1);
+  let selectedLabelIndices = $state(new Set<number>());
   let hasUnsavedChanges = $state(false);
   let saveStatus = $state<"saving" | "saved" | "error" | null>(null);
 
@@ -128,7 +128,7 @@
 
   async function handleClose() {
     onClose();
-    selectedLabelIndex = -1;
+    clearSelection();
     if (hasUnsavedChanges && saveStatus !== "saving") {
       await performSave();
     }
@@ -138,7 +138,7 @@
     if (hasUnsavedChanges && saveStatus !== "saving") {
       await performSave();
     }
-    selectedLabelIndex = -1;
+    clearSelection();
     saveStatus = null;
     callback();
   }
@@ -175,14 +175,51 @@
     centerImage();
   }
 
-  function isSelectedLabelIndexValid() {
+  function isSelectedSingle() {
+    return selectedLabelIndices.size === 1;
+  }
+
+  function isSelectedAny() {
+    return selectedLabelIndices.size > 0;
+  }
+
+  function getSingleSelectedIndex(): number {
+    if (selectedLabelIndices.size !== 1) return -1;
+    return selectedLabelIndices.values().next().value as number;
+  }
+
+  function isLabelSelected(labelIndex: number): boolean {
+    return selectedLabelIndices.has(labelIndex);
+  }
+
+  function clearSelection() {
+    selectedLabelIndices = new Set();
+  }
+
+  function selectLabel(labelIndex: number, ctrlKey: boolean) {
+    if (ctrlKey) {
+      const next = new Set(selectedLabelIndices);
+      if (next.has(labelIndex)) {
+        next.delete(labelIndex);
+      } else {
+        next.add(labelIndex);
+      }
+      selectedLabelIndices = next;
+    } else {
+      selectedLabelIndices = new Set([labelIndex]);
+    }
+  }
+
+  function isSelectedSingleValid() {
     if (!item) return false;
-    return selectedLabelIndex >= 0 && selectedLabelIndex < item.labels.length;
+    const idx = getSingleSelectedIndex();
+    return idx >= 0 && idx < item.labels.length;
   }
 
   function handleMouseDown(e: MouseEvent, labelIndex: number, handle?: string) {
-    selectedLabelIndex = labelIndex;
+    selectLabel(labelIndex, e.ctrlKey || e.metaKey);
 
+    if (selectedLabelIndices.size !== 1) return;
     if (!imageContainer || !item) return;
 
     e.stopPropagation();
@@ -192,7 +229,8 @@
     dragStartX = (e.clientX - rect.left) / rect.width;
     dragStartY = (e.clientY - rect.top) / rect.height;
 
-    const label = item.labels[labelIndex];
+    const idx = getSingleSelectedIndex();
+    const label = item.labels[idx];
     dragStartLabel = { ...label };
 
     if (handle) {
@@ -219,7 +257,7 @@
       !imageContainer ||
       !item ||
       !mouseAction ||
-      !isSelectedLabelIndexValid()
+      selectedLabelIndices.size !== 1
     ) {
       return;
     }
@@ -231,7 +269,8 @@
     const deltaX = currentX - dragStartX;
     const deltaY = currentY - dragStartY;
 
-    const label = item.labels[selectedLabelIndex];
+    const idx = getSingleSelectedIndex();
+    const label = item.labels[idx];
 
     if (mouseAction.type === "dragging") {
       label.left = Math.max(
@@ -338,7 +377,7 @@
       isPanning = false;
       return;
     }
-    if (mouseAction !== null) {
+    if (mouseAction !== null && selectedLabelIndices.size === 1) {
       hasUnsavedChanges = true;
     }
     mouseAction = null;
@@ -347,8 +386,9 @@
 
 <svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} onkeydown={(e) => {
   if (e.code === 'Space' && !e.repeat) { e.preventDefault(); spaceHeld = true; }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'c' && isSelectedLabelIndexValid() && item) { clipboard = { ...item.labels[selectedLabelIndex] }; }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard && item) { e.preventDefault(); const cx = (lastMouseNormX >= 0 && lastMouseNormX <= 1 && lastMouseNormY >= 0 && lastMouseNormY <= 1) ? Math.max(0, Math.min(1 - clipboard.width, lastMouseNormX - clipboard.width / 2)) : Math.min(clipboard.left + 0.02, 1 - clipboard.width); const cy = (lastMouseNormX >= 0 && lastMouseNormX <= 1 && lastMouseNormY >= 0 && lastMouseNormY <= 1) ? Math.max(0, Math.min(1 - clipboard.height, lastMouseNormY - clipboard.height / 2)) : Math.min(clipboard.top + 0.02, 1 - clipboard.height); item.labels.push({ ...clipboard, left: cx, top: cy }); selectedLabelIndex = item.labels.length - 1; hasUnsavedChanges = true; }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'c' && isSelectedSingleValid() && item) { clipboard = { ...item.labels[getSingleSelectedIndex()] }; }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard && item) { e.preventDefault(); const cx = (lastMouseNormX >= 0 && lastMouseNormX <= 1 && lastMouseNormY >= 0 && lastMouseNormY <= 1) ? Math.max(0, Math.min(1 - clipboard.width, lastMouseNormX - clipboard.width / 2)) : Math.min(clipboard.left + 0.02, 1 - clipboard.width); const cy = (lastMouseNormX >= 0 && lastMouseNormX <= 1 && lastMouseNormY >= 0 && lastMouseNormY <= 1) ? Math.max(0, Math.min(1 - clipboard.height, lastMouseNormY - clipboard.height / 2)) : Math.min(clipboard.top + 0.02, 1 - clipboard.height); item.labels.push({ ...clipboard, left: cx, top: cy }); selectedLabelIndices = new Set([item.labels.length - 1]); hasUnsavedChanges = true; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && isSelectedAny() && item) { e.preventDefault(); const sorted = [...selectedLabelIndices].sort((a, b) => b - a); for (const idx of sorted) { item.labels.splice(idx, 1); } clearSelection(); hasUnsavedChanges = true; }
 }} onkeyup={(e) => { if (e.code === 'Space') spaceHeld = false; }} />
 
 <dialog
@@ -367,8 +407,8 @@
           class="block bg-transparent border-0 p-0"
           aria-label="Cancel label selection"
           onclick={() => {
-            if (selectedLabelIndex !== -1) {
-              selectedLabelIndex = -1;
+            if (selectedLabelIndices.size > 0) {
+              clearSelection();
             }
           }}
         >
@@ -388,7 +428,7 @@
             class={[
               "absolute",
               numberToTailwindBg(label.classId),
-              selectedLabelIndex === labelIndex ? "outline outline-2" : "outline outline-1",
+              isLabelSelected(labelIndex) ? "outline outline-2" : "outline outline-1",
             ]}
             style:left={`${label.left * 100}%`}
             style:top={`${label.top * 100}%`}
@@ -398,7 +438,7 @@
             onmousedown={(e) => handleMouseDown(e, labelIndex)}
             onclick={(e) => e.stopPropagation()}
           >
-            {#if selectedLabelIndex === labelIndex}
+            {#if selectedLabelIndices.size === 1 && isLabelSelected(labelIndex)}
               <ResizeHandles
                 classId={label.classId}
                 {labelIndex}
@@ -432,7 +472,7 @@
         >
           Close
         </button>
-        <span class="ml-auto text-sm text-zinc-400">Labels: {item.labels.length}</span>
+        <span class="ml-auto text-sm text-zinc-400">Labels: {item.labels.length}{#if isSelectedAny()} ({selectedLabelIndices.size} selected){/if}</span>
       </div>
 
       <div class="flex gap-2 items-center text-white">
@@ -470,18 +510,18 @@
           class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
           bind:value={
             () =>
-              isSelectedLabelIndexValid()
-                ? item.labels[selectedLabelIndex].classId
+              isSelectedSingleValid()
+                ? item.labels[getSingleSelectedIndex()].classId
                 : null,
             (v) => {
-              if (isSelectedLabelIndexValid()) {
-                item.labels[selectedLabelIndex].classId = v ?? 0;
+              if (isSelectedSingleValid()) {
+                item.labels[getSingleSelectedIndex()].classId = v ?? 0;
                 hasUnsavedChanges = true;
               }
             }
           }
           step={1}
-          disabled={!isSelectedLabelIndexValid()}
+          disabled={!isSelectedSingleValid()}
         />
       </label>
 
@@ -493,12 +533,12 @@
             class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
             bind:value={
               () =>
-                isSelectedLabelIndexValid()
-                  ? item.labels[selectedLabelIndex].top
+                isSelectedSingleValid()
+                  ? item.labels[getSingleSelectedIndex()].top
                   : null,
               (v) => {
-                if (isSelectedLabelIndexValid()) {
-                  item.labels[selectedLabelIndex].top = v ?? 0;
+                if (isSelectedSingleValid()) {
+                  item.labels[getSingleSelectedIndex()].top = v ?? 0;
                   hasUnsavedChanges = true;
                 }
               }
@@ -506,7 +546,7 @@
             step={0.001}
             min={0}
             max={1}
-            disabled={!isSelectedLabelIndexValid()}
+            disabled={!isSelectedSingleValid()}
           />
         </label>
 
@@ -517,12 +557,12 @@
             class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
             bind:value={
               () =>
-                isSelectedLabelIndexValid()
-                  ? item.labels[selectedLabelIndex].left
+                isSelectedSingleValid()
+                  ? item.labels[getSingleSelectedIndex()].left
                   : null,
               (v) => {
-                if (isSelectedLabelIndexValid()) {
-                  item.labels[selectedLabelIndex].left = v ?? 0;
+                if (isSelectedSingleValid()) {
+                  item.labels[getSingleSelectedIndex()].left = v ?? 0;
                   hasUnsavedChanges = true;
                 }
               }
@@ -530,15 +570,15 @@
             step={0.001}
             min={0}
             max={1}
-            disabled={!isSelectedLabelIndexValid()}
+            disabled={!isSelectedSingleValid()}
           />
         </label>
 
         <label class="block text-white">
           Width
-          {#if isSelectedLabelIndexValid() && imgEl?.naturalWidth}
+          {#if isSelectedSingleValid() && imgEl?.naturalWidth}
             <span class="text-zinc-500 text-xs">
-              ({Math.round(item.labels[selectedLabelIndex].width * imgEl.naturalWidth)}px)
+              ({Math.round(item.labels[getSingleSelectedIndex()].width * imgEl.naturalWidth)}px)
             </span>
           {/if}
           <input
@@ -546,18 +586,18 @@
             class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
             bind:value={
               () =>
-                isSelectedLabelIndexValid()
-                  ? item.labels[selectedLabelIndex].width
+                isSelectedSingleValid()
+                  ? item.labels[getSingleSelectedIndex()].width
                   : null,
               (v) => {
-                if (isSelectedLabelIndexValid()) {
-                  item.labels[selectedLabelIndex].width = v ?? 0;
+                if (isSelectedSingleValid()) {
+                  item.labels[getSingleSelectedIndex()].width = v ?? 0;
                   hasUnsavedChanges = true;
                 }
               }
             }
             step={0.001}
-            disabled={!isSelectedLabelIndexValid()}
+            disabled={!isSelectedSingleValid()}
             min={0}
             max={1}
           />
@@ -565,9 +605,9 @@
 
         <label class="block text-white">
           Height
-          {#if isSelectedLabelIndexValid() && imgEl?.naturalHeight}
+          {#if isSelectedSingleValid() && imgEl?.naturalHeight}
             <span class="text-zinc-500 text-xs">
-              ({Math.round(item.labels[selectedLabelIndex].height * imgEl.naturalHeight)}px)
+              ({Math.round(item.labels[getSingleSelectedIndex()].height * imgEl.naturalHeight)}px)
             </span>
           {/if}
           <input
@@ -575,12 +615,12 @@
             class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
             bind:value={
               () =>
-                isSelectedLabelIndexValid()
-                  ? item.labels[selectedLabelIndex].height
+                isSelectedSingleValid()
+                  ? item.labels[getSingleSelectedIndex()].height
                   : null,
               (v) => {
-                if (isSelectedLabelIndexValid()) {
-                  item.labels[selectedLabelIndex].height = v ?? 0;
+                if (isSelectedSingleValid()) {
+                  item.labels[getSingleSelectedIndex()].height = v ?? 0;
                   hasUnsavedChanges = true;
                 }
               }
@@ -588,7 +628,7 @@
             step={0.001}
             min={0}
             max={1}
-            disabled={!isSelectedLabelIndexValid()}
+            disabled={!isSelectedSingleValid()}
           />
         </label>
       </div>
@@ -620,7 +660,7 @@
             height: 0.05,
             width: 0.05,
           });
-          selectedLabelIndex = item.labels.length - 1;
+          selectedLabelIndices = new Set([item.labels.length - 1]);
           hasUnsavedChanges = true;
         }}
       >
@@ -628,30 +668,35 @@
       </button>
 
       <button
-        class="block py-2 px-3 bg-red-600 text-white hover:bg-red-700"
+        class="block py-2 px-3 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+        disabled={!isSelectedAny()}
         onclick={() => {
-          if (isSelectedLabelIndexValid()) {
-            item.labels.splice(selectedLabelIndex, 1);
-            selectedLabelIndex = -1;
+          if (isSelectedAny()) {
+            const sorted = [...selectedLabelIndices].sort((a, b) => b - a);
+            for (const idx of sorted) {
+              item.labels.splice(idx, 1);
+            }
+            clearSelection();
             hasUnsavedChanges = true;
           }
         }}
       >
-        Delete Selected label
+        Delete{#if selectedLabelIndices.size > 1} {selectedLabelIndices.size} selected{/if} label{#if selectedLabelIndices.size !== 1}s{/if}
       </button>
 
       <button
-        class="block py-2 px-3 bg-zinc-200 hover:bg-zinc-300"
+        class="block py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
+        disabled={!isSelectedAny()}
         onclick={() => {
-          selectedLabelIndex = -1;
+          clearSelection();
         }}
       >
         Cancel selection
       </button>
 
-      {#if isSelectedLabelIndexValid()}
+      {#if isSelectedSingleValid()}
         <p class="block py-2 px-3 bg-zinc-200">
-          Normalized area: {normArea(item.labels[selectedLabelIndex])}
+          Normalized area: {normArea(item.labels[getSingleSelectedIndex()])}
         </p>
       {/if}
     </div>
@@ -665,6 +710,7 @@
     margin: 0;
   }
   input[type="number"] {
+    appearance: textfield;
     -moz-appearance: textfield;
   }
 </style>

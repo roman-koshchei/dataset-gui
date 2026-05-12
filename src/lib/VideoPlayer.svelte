@@ -1,6 +1,6 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { buildYouTubeEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
+  import { buildYouTubeEmbedUrl, buildXEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
   import type { VideoMask } from "./video-collection";
   import { numberToAccentPalette } from "./helpers";
 
@@ -318,6 +318,7 @@
   let playbackRate = $state(1);
   let showMasks = $state(true);
   let selectedMaskIndex = $state(-1);
+  let xEmbedIframe: HTMLIFrameElement | undefined = $state();
   let maskDrag: MaskDrag | null = $state(null);
 
   let markIn: number | null = $state(null);
@@ -410,7 +411,22 @@
   });
 
   let videoSrc = $derived(filePath ? convertFileSrc(filePath) : "");
-  let youtubeEmbedSrc = $derived(youtubeUrl ? buildYouTubeEmbedUrl(youtubeUrl) : "");
+  let youtubeEmbedSrc = $derived(youtubeUrl ? buildYouTubeEmbedUrl(youtubeUrl) : null);
+  let xEmbedSrc = $derived(youtubeUrl ? buildXEmbedUrl(youtubeUrl) : null);
+
+  $effect(() => {
+    const iframe = xEmbedIframe;
+    if (!iframe) return;
+    const handler = (e: MessageEvent) => {
+      if (e.source !== iframe.contentWindow) return;
+      const data = e.data;
+      if (data?.event === "resize" && data?.height) {
+        iframe.style.height = data.height + "px";
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  });
 
   function zoomToFull() {
     zoomStart = 0;
@@ -1126,6 +1142,57 @@
       </div>
     {/if}
   </div>
+{:else if xEmbedSrc}
+  <div class="space-y-3">
+    <div class="bg-black max-w-2xl mx-auto border border-zinc-700 rounded overflow-hidden">
+      <iframe
+        src={xEmbedSrc}
+        title="X post video player"
+        bind:this={xEmbedIframe}
+        class="w-full"
+        style="height: 800px; border: none; display: block;"
+        allow="autoplay; fullscreen"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen
+      ></iframe>
+    </div>
+
+    <div class="text-sm text-zinc-400 bg-zinc-900/50 px-3 py-2 border border-zinc-800">
+      X preview is view-only. Timeline editing still requires a local video file.
+    </div>
+
+    {#if invalidSegmentCount > 0}
+      <div class="text-sm text-yellow-400 bg-yellow-900/30 px-3 py-2 border border-yellow-800/50">
+        {invalidSegmentCount} segment{invalidSegmentCount > 1 ? 's have' : ' has'} invalid timecode format
+      </div>
+    {/if}
+
+    {#if segments.length > 0}
+      <div class="space-y-1">
+        <div class="text-xs text-zinc-500">Segments ({segments.length})</div>
+        <div class="flex flex-wrap gap-1">
+          {#each segments as seg, i}
+            {@const palette = numberToAccentPalette(i)}
+            <div
+              class="text-xs px-2 py-0.5 inline-flex items-center gap-1 transition-colors"
+              role="group"
+              aria-label={`Segment ${i + 1}`}
+              onmouseenter={() => hoveredSegment = i}
+              onmouseleave={() => hoveredSegment = -1}
+              style="background-color: {isSegmentHighlighted(i) ? palette.fillStrong : palette.fillMuted}; color: {isSegmentHighlighted(i) ? 'white' : palette.text};"
+            >
+              <span>{seg[0]}–{seg[1]}</span>
+              <button
+                class="text-red-400 hover:text-red-300 text-[10px]"
+                tabindex={-1}
+                onclick={(e: Event) => { e.stopPropagation(); removeSegment(i); }}
+              >x</button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
 {:else}
-  <div class="text-zinc-600 text-sm">No local video file or YouTube URL found</div>
+  <div class="text-zinc-600 text-sm">No local video file or embeddable URL found</div>
 {/if}

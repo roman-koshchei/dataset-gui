@@ -525,33 +525,31 @@
                 {#each row.items as item (datasetItemKey(item))}
                   <div class="p-1 h-full grid grid-rows-[auto_2rem] gap-1 overflow-hidden">
                     <button
-                      class="aspect-video w-full overflow-hidden flex items-center justify-center"
+                      class="relative aspect-video w-full overflow-hidden"
                       onclick={() => openEditDialog(item)}
                     >
-                      <div class="relative inline-block max-h-full max-w-full">
-                        <img
-                          class="block max-h-full max-w-full"
-                          width={1280}
-                          height={720}
-                          src={item.imageSrc}
-                          alt=""
-                          loading="eager"
-                          decoding="async"
-                        />
+                      <img
+                        class="block w-full h-full object-contain"
+                        width={1280}
+                        height={720}
+                        src={item.imageSrc}
+                        alt=""
+                        loading="eager"
+                        decoding="async"
+                      />
 
-                        {#each item.labels as label}
-                          <div
-                            class={[
-                              "absolute pointer-events-none border-2",
-                              numberToTailwindBorder(label.classId),
-                            ]}
-                            style:left={`${label.left * 100}%`}
-                            style:top={`${label.top * 100}%`}
-                            style:width={`${label.width * 100}%`}
-                            style:height={`${label.height * 100}%`}
-                          ></div>
-                        {/each}
-                      </div>
+                      {#each item.labels as label}
+                        <div
+                          class={[
+                            "absolute pointer-events-none border-2",
+                            numberToTailwindBorder(label.classId),
+                          ]}
+                          style:left={`${label.left * 100}%`}
+                          style:top={`${label.top * 100}%`}
+                          style:width={`${label.width * 100}%`}
+                          style:height={`${label.height * 100}%`}
+                        ></div>
+                      {/each}
                     </button>
 
                     <div class="min-w-0 flex items-center gap-2 text-sm overflow-hidden">
