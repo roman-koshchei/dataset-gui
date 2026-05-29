@@ -1,9 +1,18 @@
+export type VideoMask = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  segment?: string[];
+};
+
 export type VideoEntry = {
   url?: string;
   file?: string;
   file_path?: string;
   tags: string[];
   keep_segments?: string[][];
+  masks?: VideoMask[];
 };
 
 export type VideoCollection = {
@@ -68,8 +77,13 @@ export function buildYouTubeEmbedUrl(url: string): string | null {
 }
 
 export function extractXId(url: string): string | null {
-  const match = url.match(/x\.com\/i\/status\/(\d+)/);
+  const match = url.match(/(?:x\.com|twitter\.com)\/(?:\w+\/status|i\/status)\/(\d+)/);
   return match ? match[1] : null;
+}
+
+export function buildXEmbedUrl(url: string): string | null {
+  const statusId = extractXId(url);
+  return statusId ? `https://platform.twitter.com/embed/Tweet.html?id=${statusId}&embedId=twitter-widget-0&frame=false&hideCard=false&hideThread=true&theme=dark` : null;
 }
 
 export function extractVideoId(url: string): string | null {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { buildYouTubeEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
+  import { buildYouTubeEmbedUrl, buildXEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
+  import type { VideoMask } from "./video-collection";
   import { numberToAccentPalette } from "./helpers";
 
   type ZoomRange = {
@@ -15,6 +16,46 @@
     start: number;
     end: number;
   };
+
+  type MaskDrag = {
+    index: number;
+    mode: "move" | "resize";
+    handle: string;
+    startX: number;
+    startY: number;
+    initial: VideoMask;
+  };
+
+  const maskResizeHandles = [
+    { position: "tl", classes: "-left-3 -top-3 cursor-nw-resize", label: "Resize top-left" },
+    { position: "tr", classes: "-right-3 -top-3 cursor-ne-resize", label: "Resize top-right" },
+    { position: "bl", classes: "-left-3 -bottom-3 cursor-sw-resize", label: "Resize bottom-left" },
+    { position: "br", classes: "-right-3 -bottom-3 cursor-se-resize", label: "Resize bottom-right" },
+    { position: "t", classes: "left-1/2 -translate-x-1/2 -top-3 cursor-n-resize", label: "Resize top" },
+    { position: "b", classes: "left-1/2 -translate-x-1/2 -bottom-3 cursor-s-resize", label: "Resize bottom" },
+    { position: "l", classes: "-left-3 top-1/2 -translate-y-1/2 cursor-w-resize", label: "Resize left" },
+    { position: "r", classes: "-right-3 top-1/2 -translate-y-1/2 cursor-e-resize", label: "Resize right" },
+  ];
+
+  function clamp(value: number, min = 0, max = 1): number {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function sameSegment(a?: string[], b?: string[]): boolean {
+    return (a?.[0] ?? "") === (b?.[0] ?? "") && (a?.[1] ?? "") === (b?.[1] ?? "");
+  }
+
+  function normalizeMask(mask: VideoMask): VideoMask {
+    const width = clamp(mask.width, 0.01, 1);
+    const height = clamp(mask.height, 0.01, 1);
+    return {
+      ...mask,
+      width,
+      height,
+      left: clamp(mask.left, 0, 1 - width),
+      top: clamp(mask.top, 0, 1 - height),
+    };
+  }
 
   function clampRange(start: number, end: number): ZoomRange {
     return {
@@ -251,25 +292,34 @@
     filePath,
     youtubeUrl = "",
     segments = [],
+    masks = [],
     onSegmentsChange,
+    onMasksChange,
     onSegmentHover,
     highlightedSegmentIndex = -1,
   }: {
     filePath: string;
     youtubeUrl?: string;
     segments?: string[][];
+    masks?: VideoMask[];
     onSegmentsChange: (segments: string[][]) => void;
+    onMasksChange?: (masks: VideoMask[]) => void;
     onSegmentHover?: (index: number) => void;
     highlightedSegmentIndex?: number;
   } = $props();
 
   let videoEl: HTMLVideoElement | undefined = $state();
+  let videoFrameEl: HTMLDivElement | undefined = $state();
   let currentTime = $state(0);
   let duration = $state(0);
   let playing = $state(false);
   let timelineEl: HTMLDivElement | undefined = $state();
   let videoError = $state("");
   let playbackRate = $state(1);
+  let showMasks = $state(true);
+  let selectedMaskIndex = $state(-1);
+  let xEmbedIframe: HTMLIFrameElement | undefined = $state();
+  let maskDrag: MaskDrag | null = $state(null);
 
   let markIn: number | null = $state(null);
   let dragging = $state(false);
@@ -342,6 +392,12 @@
     parsedSegments.find(seg => currentTime >= seg.start && currentTime <= seg.end)?.index ?? -1
   );
 
+  let visibleMasks = $derived(
+    masks
+      .map((mask, index) => ({ mask: normalizeMask(mask), index }))
+      .filter(({ mask }) => !mask.segment || parsedSegments.some(seg => seg.index === activeSegment && sameSegment(mask.segment, segments[seg.index])))
+  );
+
   let isTimelineInteracting = $derived(
     dragging || isPanning || edgeDrag !== null || overviewDragging
   );
@@ -355,7 +411,22 @@
   });
 
   let videoSrc = $derived(filePath ? convertFileSrc(filePath) : "");
-  let youtubeEmbedSrc = $derived(youtubeUrl ? buildYouTubeEmbedUrl(youtubeUrl) : "");
+  let youtubeEmbedSrc = $derived(youtubeUrl ? buildYouTubeEmbedUrl(youtubeUrl) : null);
+  let xEmbedSrc = $derived(youtubeUrl ? buildXEmbedUrl(youtubeUrl) : null);
+
+  $effect(() => {
+    const iframe = xEmbedIframe;
+    if (!iframe) return;
+    const handler = (e: MessageEvent) => {
+      if (e.source !== iframe.contentWindow) return;
+      const data = e.data;
+      if (data?.event === "resize" && data?.height) {
+        iframe.style.height = data.height + "px";
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  });
 
   function zoomToFull() {
     zoomStart = 0;
@@ -440,6 +511,82 @@
 
   function removeSegment(index: number) {
     onSegmentsChange(removeSegmentAt(segments, index));
+  }
+
+  function updateMasks(nextMasks: VideoMask[]) {
+    onMasksChange?.(nextMasks.map(normalizeMask));
+  }
+
+  function addMask(segmentScoped: boolean) {
+    const active = activeSegment >= 0 ? segments[activeSegment] : undefined;
+    const next: VideoMask = {
+      left: 0.35,
+      top: 0.35,
+      width: 0.3,
+      height: 0.18,
+      ...(segmentScoped && active ? { segment: [...active] } : {}),
+    };
+    updateMasks([...masks, next]);
+    selectedMaskIndex = masks.length;
+    showMasks = true;
+  }
+
+  function removeMask(index: number) {
+    updateMasks(masks.filter((_, i) => i !== index));
+    selectedMaskIndex = -1;
+  }
+
+  function videoFramePoint(e: MouseEvent): { x: number; y: number } {
+    if (!videoFrameEl) return { x: 0, y: 0 };
+    const rect = videoFrameEl.getBoundingClientRect();
+    return {
+      x: clamp((e.clientX - rect.left) / rect.width),
+      y: clamp((e.clientY - rect.top) / rect.height),
+    };
+  }
+
+  function startMaskDrag(e: MouseEvent, index: number, mode: "move" | "resize", handle = "") {
+    e.stopPropagation();
+    e.preventDefault();
+    const point = videoFramePoint(e);
+    selectedMaskIndex = index;
+    maskDrag = { index, mode, handle, startX: point.x, startY: point.y, initial: normalizeMask(masks[index]) };
+  }
+
+  function handleMaskMove(e: MouseEvent) {
+    if (!maskDrag) return;
+    const point = videoFramePoint(e);
+    const dx = point.x - maskDrag.startX;
+    const dy = point.y - maskDrag.startY;
+    const initial = maskDrag.initial;
+    let left = initial.left;
+    let top = initial.top;
+    let width = initial.width;
+    let height = initial.height;
+
+    if (maskDrag.mode === "move") {
+      left = initial.left + dx;
+      top = initial.top + dy;
+    } else {
+      if (maskDrag.handle.includes("l")) {
+        left = initial.left + dx;
+        width = initial.width - dx;
+      }
+      if (maskDrag.handle.includes("r")) width = initial.width + dx;
+      if (maskDrag.handle.includes("t")) {
+        top = initial.top + dy;
+        height = initial.height - dy;
+      }
+      if (maskDrag.handle.includes("b")) height = initial.height + dy;
+    }
+
+    const next = [...masks];
+    next[maskDrag.index] = normalizeMask({ ...initial, left, top, width, height });
+    updateMasks(next);
+  }
+
+  function stopMaskDrag() {
+    maskDrag = null;
   }
 
   function timelineMousePos(e: MouseEvent): number {
@@ -617,11 +764,20 @@
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
   });
+
+  $effect(() => {
+    window.addEventListener("mousemove", handleMaskMove);
+    window.addEventListener("mouseup", stopMaskDrag);
+    return () => {
+      window.removeEventListener("mousemove", handleMaskMove);
+      window.removeEventListener("mouseup", stopMaskDrag);
+    };
+  });
 </script>
 
 {#if videoSrc}
   <div class="space-y-3">
-    <div class="relative bg-black aspect-video max-w-2xl mx-auto">
+    <div bind:this={videoFrameEl} class="relative bg-black aspect-video max-w-2xl mx-auto overflow-hidden">
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
         bind:this={videoEl}
@@ -630,9 +786,33 @@
         onclick={togglePlay}
         ontimeupdate={tick}
       ></video>
+      {#if showMasks}
+        {#each visibleMasks as { mask, index }}
+          <div
+            class="absolute bg-black/70 cursor-move"
+            style="left: {mask.left * 100}%; top: {mask.top * 100}%; width: {mask.width * 100}%; height: {mask.height * 100}%;"
+            role="button"
+            tabindex="-1"
+            aria-label={`Mask rectangle ${index + 1}`}
+            onmousedown={(e) => startMaskDrag(e, index, "move")}
+          >
+            {#if selectedMaskIndex === index}
+              {#each maskResizeHandles as handle}
+                <div
+                  class="absolute h-3 w-3 rounded-md border-2 border-white bg-zinc-900 {handle.classes}"
+                  role="button"
+                  tabindex="-1"
+                  aria-label={handle.label}
+                  onmousedown={(e) => startMaskDrag(e, index, "resize", handle.position)}
+                ></div>
+              {/each}
+            {/if}
+          </div>
+        {/each}
+      {/if}
       {#if !playing && currentTime === 0}
         <button
-          class="absolute inset-0 grid place-content-center text-white/50 text-lg cursor-pointer"
+          class="absolute inset-0 grid place-content-center text-white/50 text-lg cursor-pointer {showMasks && visibleMasks.length > 0 ? 'pointer-events-none' : ''}"
           onclick={togglePlay}
         >
           Play
@@ -680,6 +860,51 @@
           </button>
         {/each}
       </div>
+    </div>
+
+    <div class="flex items-center gap-2 text-sm flex-wrap">
+      <button
+        class="px-3 py-1 {showMasks ? 'bg-zinc-500 text-white' : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'}"
+        onclick={() => showMasks = !showMasks}
+      >
+        {showMasks ? "Hide Masks" : "Show Masks"}
+      </button>
+      <button
+        class="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:text-zinc-500"
+        onclick={() => addMask(false)}
+        disabled={!onMasksChange}
+      >
+        + Whole Video Mask
+      </button>
+      <button
+        class="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:text-zinc-500"
+        onclick={() => addMask(true)}
+        disabled={!onMasksChange || activeSegment < 0}
+        title={activeSegment < 0 ? "Move playhead inside a segment first" : "Add mask only for the active segment"}
+      >
+        + Segment Mask
+      </button>
+      {#if selectedMaskIndex >= 0 && masks[selectedMaskIndex]}
+        {@const selectedMask = masks[selectedMaskIndex]}
+        <span class="text-xs text-zinc-500">
+          Selected: {selectedMask.segment ? `${selectedMask.segment[0]}-${selectedMask.segment[1]}` : "whole video"}
+        </span>
+        <button
+          class="px-2 py-1 text-xs bg-zinc-700 text-zinc-300 hover:bg-zinc-600"
+          onclick={() => selectedMaskIndex = -1}
+        >
+          Unselect
+        </button>
+        <button
+          class="px-2 py-1 text-xs bg-red-900/70 text-red-300 hover:bg-red-900"
+          onclick={() => removeMask(selectedMaskIndex)}
+        >
+          Delete Mask
+        </button>
+      {/if}
+      {#if masks.length > 0}
+        <span class="text-xs text-zinc-500">{visibleMasks.length}/{masks.length} mask{masks.length !== 1 ? 's' : ''} visible</span>
+      {/if}
     </div>
 
     <div
@@ -917,6 +1142,57 @@
       </div>
     {/if}
   </div>
+{:else if xEmbedSrc}
+  <div class="space-y-3">
+    <div class="bg-black max-w-2xl mx-auto border border-zinc-700 rounded overflow-hidden">
+      <iframe
+        src={xEmbedSrc}
+        title="X post video player"
+        bind:this={xEmbedIframe}
+        class="w-full"
+        style="height: 800px; border: none; display: block;"
+        allow="autoplay; fullscreen"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen
+      ></iframe>
+    </div>
+
+    <div class="text-sm text-zinc-400 bg-zinc-900/50 px-3 py-2 border border-zinc-800">
+      X preview is view-only. Timeline editing still requires a local video file.
+    </div>
+
+    {#if invalidSegmentCount > 0}
+      <div class="text-sm text-yellow-400 bg-yellow-900/30 px-3 py-2 border border-yellow-800/50">
+        {invalidSegmentCount} segment{invalidSegmentCount > 1 ? 's have' : ' has'} invalid timecode format
+      </div>
+    {/if}
+
+    {#if segments.length > 0}
+      <div class="space-y-1">
+        <div class="text-xs text-zinc-500">Segments ({segments.length})</div>
+        <div class="flex flex-wrap gap-1">
+          {#each segments as seg, i}
+            {@const palette = numberToAccentPalette(i)}
+            <div
+              class="text-xs px-2 py-0.5 inline-flex items-center gap-1 transition-colors"
+              role="group"
+              aria-label={`Segment ${i + 1}`}
+              onmouseenter={() => hoveredSegment = i}
+              onmouseleave={() => hoveredSegment = -1}
+              style="background-color: {isSegmentHighlighted(i) ? palette.fillStrong : palette.fillMuted}; color: {isSegmentHighlighted(i) ? 'white' : palette.text};"
+            >
+              <span>{seg[0]}–{seg[1]}</span>
+              <button
+                class="text-red-400 hover:text-red-300 text-[10px]"
+                tabindex={-1}
+                onclick={(e: Event) => { e.stopPropagation(); removeSegment(i); }}
+              >x</button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
 {:else}
-  <div class="text-zinc-600 text-sm">No local video file or YouTube URL found</div>
+  <div class="text-zinc-600 text-sm">No local video file or embeddable URL found</div>
 {/if}

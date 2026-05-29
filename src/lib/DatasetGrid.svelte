@@ -1,7 +1,6 @@
 <script lang="ts">
   import {
     datasetItemKey,
-    datasetLabelKey,
     logPerformance,
     loadAndStoreBatch,
     getFilteredWindow,
@@ -192,6 +191,7 @@
 
     if (visibleStart < cacheOffset + margin || visibleEnd + margin > cacheEnd) {
       const center = Math.max(0, Math.floor((visibleStart + visibleEnd) / 2) - Math.floor(CACHE_SIZE / 2));
+      if (center === cacheOffset) return;
       pendingFetchRequest = refreshCache(center).finally(() => { pendingFetchRequest = null; });
     }
   }
@@ -310,7 +310,7 @@
 
       await tick();
       if (newLoadId !== activeLoadId) return;
-      logPerformance(`DatasetGrid initial render complete: loadId=${newLoadId} renderedItems=${renderedVirtualItemCount()} filteredItems=${filteredTotal} totalItems=${totalItems} columns=${columnCount()} rowHeight=${rowHeight()} elapsedMs=${Math.round(performance.now() - startMs)}`);
+      logPerformance(`DatasetGrid data load complete: loadId=${newLoadId} items=${cacheItems.length} filteredItems=${filteredTotal} totalItems=${totalItems} columns=${columnCount()} rowHeight=${rowHeight()} elapsedMs=${Math.round(performance.now() - startMs)}`);
     } catch (err) {
       if (newLoadId !== activeLoadId) return;
       loadError = err instanceof Error ? err.message : String(err);
@@ -511,77 +511,77 @@
         No items match the current filter.
       </div>
     {:else}
-      <div class="relative" style:height={`${totalRows() * rowHeight()}px`}>
-        <div
-          class="absolute inset-x-0 top-0 will-change-transform"
-          style:transform={`translateY(${virtualStartRow() * rowHeight()}px)`}
-        >
-          {#each virtualRows() as row (row.rowIndex)}
-            <div
-              class="grid divide-x divide-zinc-700 border-b border-zinc-700"
-              style:height={`${rowHeight()}px`}
-              style:grid-template-columns={`repeat(${columnCount()}, minmax(0, 1fr))`}
-            >
-              {#each row.items as item (datasetItemKey(item))}
-                <div class="p-1 h-full grid grid-rows-[auto_2rem] gap-1 overflow-hidden">
-                  <button
-                    class="relative overflow-hidden aspect-video w-full"
-                    onclick={() => openEditDialog(item)}
-                  >
-                    <img
-                      class="w-full h-full object-contain"
-                      width={1280}
-                      height={720}
-                      src={item.imageSrc}
-                      alt=""
-                      loading="eager"
-                      decoding="async"
-                    />
-
-                    {#each item.labels as label (datasetLabelKey(label))}
-                      <div
-                        class={[
-                          "absolute pointer-events-none border-2",
-                          numberToTailwindBorder(label.classId),
-                        ]}
-                        style:left={`${label.left * 100}%`}
-                        style:top={`${label.top * 100}%`}
-                        style:width={`${label.width * 100}%`}
-                        style:height={`${label.height * 100}%`}
-                      ></div>
-                    {/each}
-                  </button>
-
-                  <div class="min-w-0 flex items-center gap-2 text-sm overflow-hidden">
-                    <p class="min-w-0 flex-1 truncate" title={item.name}>{item.name}</p>
+        <div class="relative" style:height={`${totalRows() * rowHeight()}px`}>
+          <div
+            class="absolute inset-x-0 top-0 will-change-transform"
+            style:transform={`translateY(${virtualStartRow() * rowHeight()}px)`}
+          >
+            {#each virtualRows() as row (row.rowIndex)}
+              <div
+                class="grid divide-x divide-zinc-700 border-b border-zinc-700"
+                style:height={`${rowHeight()}px`}
+                style:grid-template-columns={`repeat(${columnCount()}, minmax(0, 1fr))`}
+              >
+                {#each row.items as item (datasetItemKey(item))}
+                  <div class="p-1 h-full grid grid-rows-[auto_2rem] gap-1 overflow-hidden">
                     <button
-                      onclick={() => {
-                        handleDelete(item);
-                      }}
-                      class="bg-red-700 px-1 shrink-0"
+                      class="relative aspect-video w-full overflow-hidden"
+                      onclick={() => openEditDialog(item)}
                     >
-                      Delete
+                      <img
+                        class="block w-full h-full object-contain"
+                        width={1280}
+                        height={720}
+                        src={item.imageSrc}
+                        alt=""
+                        loading="eager"
+                        decoding="async"
+                      />
+
+                      {#each item.labels as label}
+                        <div
+                          class={[
+                            "absolute pointer-events-none border-2",
+                            numberToTailwindBorder(label.classId),
+                          ]}
+                          style:left={`${label.left * 100}%`}
+                          style:top={`${label.top * 100}%`}
+                          style:width={`${label.width * 100}%`}
+                          style:height={`${label.height * 100}%`}
+                        ></div>
+                      {/each}
                     </button>
-                    <button
-                      class="bg-zinc-700 px-1 shrink-0"
-                      onclick={async () => {
-                        await revealPaths(
-                          await Promise.all([
-                            itemLabelPath(dataset, item),
-                            itemImagePath(dataset, item),
-                          ])
-                        );
-                      }}
-                    >
-                      Reveal files
-                    </button>
+
+                    <div class="min-w-0 flex items-center gap-2 text-sm overflow-hidden">
+                      <p class="min-w-0 flex-1 truncate" title={item.name}>{item.name}</p>
+                      <button
+                        onclick={() => {
+                          handleDelete(item);
+                        }}
+                        class="bg-red-700 px-1 shrink-0"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        class="bg-zinc-700 px-1 shrink-0"
+                        onclick={async () => {
+                          await revealPaths(
+                            await Promise.all([
+                              itemLabelPath(dataset, item),
+                              itemImagePath(dataset, item),
+                            ])
+                          );
+                        }}
+                      >
+                        Reveal files
+                      </button>
+                    </div>
                   </div>
-                </div>
-              {/each}
-            </div>
-          {/each}
+                {/each}
+              </div>
+            {/each}
+          </div>
         </div>
-      </div>
     {/if}
   </div>
 </section>

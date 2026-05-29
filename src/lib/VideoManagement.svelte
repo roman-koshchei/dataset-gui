@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { VideoCollection, VideoEntry } from "./video-collection";
-  import { extractYouTubeId, extractVideoId, extractFileStem, findLocalVideo, segmentsMatchFolders, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
+  import type { VideoCollection, VideoEntry, VideoMask } from "./video-collection";
+  import { extractYouTubeId, extractXId, extractVideoId, extractFileStem, findLocalVideo, segmentsMatchFolders, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
   import { writeTextFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
   import { invoke } from "@tauri-apps/api/core";
   import { convertFileSrc } from "@tauri-apps/api/core";
@@ -431,7 +431,7 @@
                  <input
                    type="text"
                    class="w-64 px-2 py-1 text-sm border border-zinc-700 bg-zinc-900"
-                   placeholder="https://youtube.com/watch?v=..."
+                    placeholder="https://youtube.com/watch?v=... or https://x.com/i/status/..."
                    bind:value={addInput}
                  />
                  <button type="submit" class="px-3 py-1 text-sm bg-green-700 hover:bg-green-600">Add</button>
@@ -493,7 +493,7 @@
 
   {#if collection && localFiles.length === 0 && resolvedVideosDir}
     <div class="p-2 bg-yellow-900/30 text-yellow-400 text-sm border-b border-yellow-800/50">
-      No local video files found in {resolvedVideosDir} — YouTube videos can still be previewed via embed
+      No local video files found in {resolvedVideosDir} — YouTube and X videos can still be previewed via embed
     </div>
   {/if}
 
@@ -533,6 +533,10 @@
                   loading="lazy"
                   onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 />
+              {:else if extractXId(video.url ?? "")}
+                <div class="w-16 h-10 bg-zinc-800 flex-shrink-0 grid place-content-center">
+                  <span class="text-zinc-500 text-xs font-bold">X</span>
+                </div>
               {:else if resolvedFilePath(video)}
                 <!-- svelte-ignore a11y_media_has_caption -->
                 <video
@@ -586,7 +590,7 @@
                       class="flex-1 px-3 py-2 border border-zinc-700 bg-zinc-800"
                       value={video.url ?? ""}
                       oninput={(e) => { video.url = (e.target as HTMLInputElement).value || undefined; hasUnsaved = true; }}
-                      placeholder="https://www.youtube.com/watch?v=..."
+                      placeholder="https://www.youtube.com/watch?v=... or https://x.com/i/status/..."
                     />
                     {#if video.url}
                       <button
@@ -662,6 +666,10 @@
                   class="w-48 h-auto border border-zinc-700"
                   loading="lazy"
                 />
+              {:else if extractXId(video.url ?? "")}
+                <div class="w-48 h-auto border border-zinc-700 bg-zinc-800 aspect-video grid place-content-center">
+                  <span class="text-zinc-500 text-lg font-bold">X</span>
+                </div>
               {:else if resolvedFilePath(video)}
                 <!-- svelte-ignore a11y_media_has_caption -->
                 <video
@@ -677,12 +685,17 @@
                <VideoPlayer
                  filePath={resolvedFilePath(video) ?? ""}
                  youtubeUrl={video.url ?? ""}
-                 segments={video.keep_segments ?? []}
-                 highlightedSegmentIndex={highlightedSegIndex}
-                 onSegmentHover={(i) => highlightedSegIndex = i}
-                    onSegmentsChange={(segs) => {
-                    const seen = new Set<string>();
-                   video.keep_segments = segs.filter(s => {
+                  segments={video.keep_segments ?? []}
+                  masks={video.masks ?? []}
+                  highlightedSegmentIndex={highlightedSegIndex}
+                  onSegmentHover={(i) => highlightedSegIndex = i}
+                  onMasksChange={(masks: VideoMask[]) => {
+                    video.masks = masks;
+                    hasUnsaved = true;
+                  }}
+                  onSegmentsChange={(segs) => {
+                     const seen = new Set<string>();
+                    video.keep_segments = segs.filter(s => {
                      const key = `${s[0]}|${s[1]}`;
                      if (seen.has(key)) return false;
                      seen.add(key);

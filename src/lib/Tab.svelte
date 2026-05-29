@@ -101,6 +101,19 @@
     }
   }
 
+  async function selectVideoDataPath() {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      title: "Select data.json",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!selected) return;
+
+    videoDataPath = typeof selected === "string" ? selected : selected[0];
+    videoError = "";
+  }
+
   async function openVideoManagement() {
     if (!videoDataPath) {
       videoError = "Video data path must be specified";
@@ -204,13 +217,22 @@
         <div class="space-y-2">
           <label class="space-y-2 block">
             data.json path
-            <input
-              type="text"
-              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
-              placeholder="D:\Datasets\...\data.json"
-              bind:value={videoDataPath}
-              oninput={() => videoError = ""}
-            />
+            <div class="mt-1 flex gap-2">
+              <input
+                type="text"
+                class="min-w-0 flex-1 px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+                placeholder="D:\Datasets\...\data.json"
+                bind:value={videoDataPath}
+                oninput={() => videoError = ""}
+              />
+              <button
+                type="button"
+                class="bg-zinc-700 py-2 px-4 hover:bg-zinc-600 transition-colors"
+                onclick={selectVideoDataPath}
+              >
+                Browse...
+              </button>
+            </div>
           </label>
           <label class="space-y-2 block">
             Videos directory <span class="text-zinc-500">(defaults to ./videos alongside data.json)</span>
