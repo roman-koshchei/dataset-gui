@@ -30,6 +30,10 @@
   let imageContainer = $state<HTMLDivElement | undefined>(undefined);
   let imgEl = $state<HTMLImageElement | undefined>(undefined);
   let viewportEl = $state<HTMLDivElement | undefined>(undefined);
+  let imageNaturalWidth = $state(0);
+  let imageNaturalHeight = $state(0);
+  let imageFitWidth = $state(0);
+  let imageFitHeight = $state(0);
   let zoom = $state(1);
   let panX = $state(0);
   let panY = $state(0);
@@ -119,11 +123,25 @@
 
   $effect(() => {
     if (item) {
+      imageNaturalWidth = 0;
+      imageNaturalHeight = 0;
+      imageFitWidth = 0;
+      imageFitHeight = 0;
       zoom = 1;
       panX = 0;
       panY = 0;
-      requestAnimationFrame(centerImage);
     }
+  });
+
+  $effect(() => {
+    const v = viewportEl;
+    if (!v) return;
+
+    const resizeObserver = new ResizeObserver(() => updateImageFit());
+    resizeObserver.observe(v);
+    updateImageFit();
+
+    return () => resizeObserver.disconnect();
   });
 
   async function handleClose() {
@@ -162,12 +180,31 @@
     requestAnimationFrame(() => {
       if (!viewportEl || !imageContainer) return;
       const vr = viewportEl.getBoundingClientRect();
-      const iw = imageContainer.offsetWidth;
-      const ih = imageContainer.offsetHeight;
+      const iw = imageFitWidth || imageContainer.offsetWidth;
+      const ih = imageFitHeight || imageContainer.offsetHeight;
       if (iw === 0 || ih === 0) return;
       panX = (vr.width - iw * zoom) / 2;
       panY = (vr.height - ih * zoom) / 2;
     });
+  }
+
+  function updateImageFit() {
+    if (!viewportEl || imageNaturalWidth <= 0 || imageNaturalHeight <= 0) return;
+
+    const vr = viewportEl.getBoundingClientRect();
+    if (vr.width <= 0 || vr.height <= 0) return;
+
+    const scale = Math.min(vr.width / imageNaturalWidth, vr.height / imageNaturalHeight);
+    imageFitWidth = imageNaturalWidth * scale;
+    imageFitHeight = imageNaturalHeight * scale;
+    centerImage();
+  }
+
+  function handleImageLoad(event: Event) {
+    const image = event.currentTarget as HTMLImageElement;
+    imageNaturalWidth = image.naturalWidth;
+    imageNaturalHeight = image.naturalHeight;
+    updateImageFit();
   }
 
   function resetView() {
@@ -400,11 +437,13 @@
       <div
         bind:this={imageContainer}
         class="relative"
+        style:width={`${imageFitWidth}px`}
+        style:height={`${imageFitHeight}px`}
         style="transform-origin: 0 0; transform: translate({panX}px, {panY}px) scale({zoom})"
       >
         <button
           type="button"
-          class="block bg-transparent border-0 p-0"
+          class="block w-full h-full bg-transparent border-0 p-0"
           aria-label="Cancel label selection"
           onclick={() => {
             if (selectedLabelIndices.size > 0) {
@@ -414,11 +453,11 @@
         >
           <img
             bind:this={imgEl}
-            class="w-full h-full max-h-[95vh] object-contain pointer-events-none"
+            class="block w-full h-full object-contain pointer-events-none"
             src={item.imageSrc}
             alt=""
             loading="lazy"
-            onload={centerImage}
+            onload={handleImageLoad}
           />
         </button>
 
