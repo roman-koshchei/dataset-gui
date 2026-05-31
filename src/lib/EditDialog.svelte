@@ -8,6 +8,8 @@
   import { numberToTailwindBg, numberToTailwindBorder, numberToOutlineColor } from "./helpers";
   import ResizeHandles from "$lib/ResizeHandles.svelte";
 
+  type ViewMode = "rgb" | "aux" | "overlay";
+
   let {
     dataset,
     item = $bindable(),
@@ -26,6 +28,8 @@
   let selectedLabelIndices = $state(new Set<number>());
   let hasUnsavedChanges = $state(false);
   let saveStatus = $state<"saving" | "saved" | "error" | null>(null);
+  let viewMode = $state<ViewMode>("rgb");
+  let auxLoadFailed = $state(false);
 
   let imageContainer = $state<HTMLDivElement | undefined>(undefined);
   let imgEl = $state<HTMLImageElement | undefined>(undefined);
@@ -60,6 +64,14 @@
   let clipboard: { left: number; top: number; width: number; height: number; classId: number } | null = null;
   let lastMouseNormX = -1;
   let lastMouseNormY = -1;
+
+  let auxImageSrc = $derived(() => item ? getAuxImageSrc(item.imageSrc) : "");
+  let displayedImageSrc = $derived(() => {
+    if (!item) return "";
+    if (viewMode === "aux" && !auxLoadFailed) return auxImageSrc();
+    return item.imageSrc;
+  });
+  let showAuxOverlay = $derived(() => viewMode === "overlay" && !auxLoadFailed && auxImageSrc().length > 0);
 
   $effect(() => {
     if (!dialog) return;
@@ -130,6 +142,7 @@
       zoom = 1;
       panX = 0;
       panY = 0;
+      auxLoadFailed = false;
     }
   });
 
@@ -202,9 +215,30 @@
 
   function handleImageLoad(event: Event) {
     const image = event.currentTarget as HTMLImageElement;
+    const dimensionsChanged =
+      imageNaturalWidth !== image.naturalWidth ||
+      imageNaturalHeight !== image.naturalHeight;
     imageNaturalWidth = image.naturalWidth;
     imageNaturalHeight = image.naturalHeight;
-    updateImageFit();
+    if (dimensionsChanged || imageFitWidth === 0 || imageFitHeight === 0) {
+      updateImageFit();
+    }
+  }
+
+  function getAuxImageSrc(imageSrc: string) {
+    const [withoutHash, hash = ""] = imageSrc.split("#", 2);
+    const [withoutQuery, query = ""] = withoutHash.split("?", 2);
+    const auxPath = withoutQuery.replace(
+      /(^|\/)images\/([^/?#]+)\.[^/.?#]+$/,
+      (_match, prefix, basename) => `${prefix}aux/${basename}.png`,
+    );
+    if (auxPath === withoutQuery) return "";
+    return `${auxPath}${query ? `?${query}` : ""}${hash ? `#${hash}` : ""}`;
+  }
+
+  function setViewMode(mode: ViewMode) {
+    viewMode = mode;
+    auxLoadFailed = false;
   }
 
   function resetView() {
@@ -454,11 +488,25 @@
           <img
             bind:this={imgEl}
             class="block w-full h-full object-contain pointer-events-none"
-            src={item.imageSrc}
+            src={displayedImageSrc()}
             alt=""
             loading="lazy"
             onload={handleImageLoad}
+            onerror={() => {
+              if (viewMode === "aux") auxLoadFailed = true;
+            }}
           />
+          {#if showAuxOverlay()}
+            <img
+              class="absolute inset-0 block w-full h-full object-contain pointer-events-none opacity-50 mix-blend-screen"
+              src={auxImageSrc()}
+              alt=""
+              loading="lazy"
+              onerror={() => {
+                auxLoadFailed = true;
+              }}
+            />
+          {/if}
         </button>
 
         {#each item.labels as label, labelIndex}
@@ -540,6 +588,44 @@
         >
           Fit
         </button>
+      </div>
+
+      <div class="space-y-1 text-white">
+        <div class="text-sm text-zinc-400">View layer</div>
+        <div class="flex gap-2">
+          <button
+            class={[
+              "py-1 px-2.5 text-sm text-white",
+              viewMode === "rgb" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600",
+            ]}
+            onclick={() => setViewMode("rgb")}
+          >
+            RGB
+          </button>
+          <button
+            class={[
+              "py-1 px-2.5 text-sm text-white",
+              viewMode === "aux" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600",
+            ]}
+            onclick={() => setViewMode("aux")}
+            disabled={!auxImageSrc()}
+          >
+            Aux
+          </button>
+          <button
+            class={[
+              "py-1 px-2.5 text-sm text-white",
+              viewMode === "overlay" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600",
+            ]}
+            onclick={() => setViewMode("overlay")}
+            disabled={!auxImageSrc()}
+          >
+            Overlay
+          </button>
+        </div>
+        {#if auxLoadFailed}
+          <div class="text-xs text-yellow-500">Aux image not found for this item.</div>
+        {/if}
       </div>
 
       <label class="block text-white">
