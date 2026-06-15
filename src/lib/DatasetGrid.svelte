@@ -22,7 +22,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, tick } from "svelte";
 
-  type FilterMode = "all" | "hasBoxes" | "noBoxes" | "hasLabelFile" | "class" | "nth";
+  type FilterMode = "all" | "hasBoxes" | "noBoxes" | "hasLabelFile" | "class" | "nth" | "nestedBoxes";
   const OVERSCAN_ROWS = 3;
   const IMAGE_ASPECT_RATIO = 9 / 16;
   const CARD_CHROME_HEIGHT = 44;
@@ -432,6 +432,13 @@
       onclick={() => toggleFilterMode("hasLabelFile")}
     >
       Has label file
+    </button>
+
+    <button
+      class="px-3 border-r border-zinc-700 py-1 {filterMode === 'nestedBoxes' ? 'bg-zinc-600' : ''}"
+      onclick={() => toggleFilterMode("nestedBoxes")}
+    >
+      Nested
     </button>
 
     <div class="px-3 flex items-center gap-2 border-r border-zinc-700 {filterMode === 'class' ? 'bg-zinc-600' : ''}">

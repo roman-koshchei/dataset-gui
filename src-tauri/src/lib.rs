@@ -300,6 +300,26 @@ fn item_base_name(name: &str) -> &str {
     name.rsplit_once('/').map(|(_, n)| n).unwrap_or(name)
 }
 
+fn has_nested_boxes(labels: &[DatasetLabel]) -> bool {
+    for i in 0..labels.len() {
+        for j in 0..labels.len() {
+            if i == j {
+                continue;
+            }
+            let inner = &labels[i];
+            let outer = &labels[j];
+            if inner.left >= outer.left
+                && inner.top >= outer.top
+                && inner.left + inner.width <= outer.left + outer.width
+                && inner.top + inner.height <= outer.top + outer.height
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn matches_filter(item: &DatasetItem, index: usize, filter: &FilterParams) -> bool {
     match filter.mode.as_str() {
         "all" => true,
@@ -310,6 +330,7 @@ fn matches_filter(item: &DatasetItem, index: usize, filter: &FilterParams) -> bo
             .class_id
             .map_or(false, |cid| item.labels.iter().any(|l| l.class_id == cid)),
         "nth" => filter.nth.map_or(false, |n| n >= 1 && index % (n as usize) == 0),
+        "nestedBoxes" => has_nested_boxes(&item.labels),
         _ => true,
     }
 }
