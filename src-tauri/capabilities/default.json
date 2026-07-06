@@ -34,6 +34,7 @@
     },
     "fs:default",
     "store:default",
-    "dialog:default"
+    "dialog:default",
+    "fs:allow-mkdir"
   ]
 }

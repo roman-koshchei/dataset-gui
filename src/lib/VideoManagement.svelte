@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { VideoCollection, VideoEntry, VideoMask } from "./video-collection";
   import { extractYouTubeId, extractXId, extractVideoId, extractFileStem, findLocalVideo, segmentsMatchFolders, segmentToFolderName, parseTimecode, formatTimecode } from "./video-collection";
-  import { writeTextFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
+  import { writeTextFile, readTextFile, exists, mkdir } from "@tauri-apps/plugin-fs";
   import { invoke } from "@tauri-apps/api/core";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import VideoPlayer from "./VideoPlayer.svelte";
@@ -218,8 +218,12 @@
         const lDir = segmentLabelsDir(video, seg);
         if (!fDir || !lDir) continue;
         try {
-          const [fOk, lOk] = await Promise.all([exists(fDir), exists(lDir)]);
-          if (fOk && lOk) dirs.push({ imagesDir: fDir, labelsDir: lDir });
+          const fOk = await exists(fDir);
+          if (!fOk) continue;
+          if (!(await exists(lDir))) {
+            await mkdir(lDir, { recursive: true });
+          }
+          dirs.push({ imagesDir: fDir, labelsDir: lDir });
         } catch { /* skip */ }
       }
     }
