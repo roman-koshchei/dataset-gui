@@ -3,6 +3,7 @@
   import Tab from "$lib/Tab.svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { logPerformance, type Dataset } from "$lib/dataset";
 
   type TabData = {
@@ -13,6 +14,7 @@
 
   let tabs = $state<TabData[]>([{ id: crypto.randomUUID() }]);
   let activeTabId = $state<string>(tabs[0].id);
+  let activeTitle = $state("");
 
   function closeTab(id: string) {
     const index = tabs.findIndex((x) => x.id === id);
@@ -33,7 +35,9 @@
   }
 
   $effect(() => {
-    document.title = activeTabId;
+    const title = activeTitle || activeTabId;
+    document.title = title;
+    void getCurrentWindow().setTitle(title).catch(() => {});
   });
 
   onMount(() => {
@@ -115,7 +119,13 @@
 
   <div class="overflow-hidden flex">
     {#each tabs as tab (tab.id)}
-      <Tab active={activeTabId === tab.id} {openDatasetInNewTab} initialState={tab.initialState} />
+      <Tab
+        active={activeTabId === tab.id}
+        {openDatasetInNewTab}
+        initialState={tab.initialState}
+        label={tab.label}
+        onTitleChange={(title: string) => activeTitle = title}
+      />
     {/each}
   </div>
 </main>

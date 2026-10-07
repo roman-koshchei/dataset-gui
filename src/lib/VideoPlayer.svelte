@@ -1,6 +1,6 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { buildYouTubeEmbedUrl, buildXEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
+  import { buildYouTubeEmbedUrl, buildXEmbedUrl, buildTelegramEmbedUrl, parseTimecode, formatTimecode, isValidTimecode } from "./video-collection";
   import type { VideoMask } from "./video-collection";
   import { numberToAccentPalette } from "./helpers";
 
@@ -37,6 +37,8 @@
     { position: "r", classes: "-right-3 top-1/2 -translate-y-1/2 cursor-e-resize", label: "Resize right" },
   ];
 
+  const MIN_SPLIT_MARGIN = 0.05;
+
   function clamp(value: number, min = 0, max = 1): number {
     return Math.max(min, Math.min(max, value));
   }
@@ -46,8 +48,8 @@
   }
 
   function normalizeMask(mask: VideoMask): VideoMask {
-    const width = clamp(mask.width, 0.01, 1);
-    const height = clamp(mask.height, 0.01, 1);
+    const width = clamp(mask.width, 0.001, 1);
+    const height = clamp(mask.height, 0.001, 1);
     return {
       ...mask,
       width,
@@ -247,7 +249,7 @@
     currentTime: number,
   ): string[][] | null {
     for (const segment of parsedSegments) {
-      if (currentTime > segment.start + 0.5 && currentTime < segment.end - 0.5) {
+      if (currentTime > segment.start + MIN_SPLIT_MARGIN && currentTime < segment.end - MIN_SPLIT_MARGIN) {
         const updated = [...segments];
         updated.splice(
           segment.index,
@@ -293,6 +295,7 @@
     youtubeUrl = "",
     segments = [],
     masks = [],
+    muted = true,
     onSegmentsChange,
     onMasksChange,
     onSegmentHover,
@@ -302,6 +305,7 @@
     youtubeUrl?: string;
     segments?: string[][];
     masks?: VideoMask[];
+    muted?: boolean;
     onSegmentsChange: (segments: string[][]) => void;
     onMasksChange?: (masks: VideoMask[]) => void;
     onSegmentHover?: (index: number) => void;
@@ -413,6 +417,7 @@
   let videoSrc = $derived(filePath ? convertFileSrc(filePath) : "");
   let youtubeEmbedSrc = $derived(youtubeUrl ? buildYouTubeEmbedUrl(youtubeUrl) : null);
   let xEmbedSrc = $derived(youtubeUrl ? buildXEmbedUrl(youtubeUrl) : null);
+  let telegramEmbedSrc = $derived(youtubeUrl ? buildTelegramEmbedUrl(youtubeUrl) : null);
 
   $effect(() => {
     const iframe = xEmbedIframe;
@@ -432,6 +437,14 @@
     zoomStart = 0;
     zoomEnd = 1;
   }
+
+  // Reset timeline zoom to 100% whenever a different video is selected.
+  $effect(() => {
+    void filePath;
+    void youtubeUrl;
+    zoomStart = 0;
+    zoomEnd = 1;
+  });
 
   function zoomIn() {
     ({ start: zoomStart, end: zoomEnd } = zoomInRange(zoomStart, zoomEnd));
@@ -493,7 +506,7 @@
   let canSplit = $derived(() => {
     if (!videoEl) return false;
     const t = currentTime;
-    return parsedSegments.some(seg => t > seg.start + 0.5 && t < seg.end - 0.5);
+    return parsedSegments.some(seg => t > seg.start + MIN_SPLIT_MARGIN && t < seg.end - MIN_SPLIT_MARGIN);
   });
 
   function handleMarkIn() {
@@ -706,6 +719,12 @@
   $effect(() => {
     const el = videoEl;
     if (!el) return;
+    el.muted = muted;
+  });
+
+  $effect(() => {
+    const el = videoEl;
+    if (!el) return;
     const onPlay = () => {
       playing = true;
       startPlaybackLoop();
@@ -799,7 +818,7 @@
             {#if selectedMaskIndex === index}
               {#each maskResizeHandles as handle}
                 <div
-                  class="absolute h-3 w-3 rounded-md border-2 border-white bg-zinc-900 {handle.classes}"
+                  class="absolute h-3 w-3 border-2 border-white bg-zinc-900 {handle.classes}"
                   role="button"
                   tabindex="-1"
                   aria-label={handle.label}
@@ -826,7 +845,7 @@
       </div>
     {/if}
 
-    <div class="flex items-center gap-3 text-sm">
+    <div class="flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Playback and segment controls">
       <button
         class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600"
         onclick={() => seekTo(Math.max(0, currentTime - 1))}
@@ -847,7 +866,28 @@
       >
         +1s
       </button>
-      <span class="text-zinc-400 tabular-nums">
+        <button
+          class="px-3 py-1 bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-700 disabled:text-zinc-500"
+          onclick={handleMarkIn}
+          disabled={!videoEl}
+        >
+          Mark In{markIn !== null ? ` (${formatTimecode(markIn)})` : ""}
+        </button>
+        <button
+          class="px-3 py-1 bg-green-700 hover:bg-green-600 disabled:bg-zinc-700 disabled:text-zinc-500"
+          onclick={handleMarkOut}
+          disabled={markIn === null}
+        >
+          Mark Out
+        </button>
+        <button
+          class="px-3 py-1 bg-amber-700 hover:bg-amber-600 disabled:bg-zinc-700 disabled:text-zinc-500"
+          onclick={splitAtPlayhead}
+          disabled={!canSplit()}
+        >
+          Split
+        </button>
+      <span class="text-zinc-400 tabular-nums whitespace-nowrap">
         {formatTimecode(currentTime)} / {formatTimecode(duration)}
       </span>
       <div class="flex items-center gap-0.5 ml-auto">
@@ -905,35 +945,6 @@
       {#if masks.length > 0}
         <span class="text-xs text-zinc-500">{visibleMasks.length}/{masks.length} mask{masks.length !== 1 ? 's' : ''} visible</span>
       {/if}
-    </div>
-
-    <div
-      class="space-y-1"
-      role="group"
-    >
-      <div class="flex items-center gap-2 text-sm">
-        <button
-          class="px-3 py-1 bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-700 disabled:text-zinc-500"
-          onclick={handleMarkIn}
-          disabled={!videoEl}
-        >
-          Mark In{markIn !== null ? ` (${formatTimecode(markIn)})` : ""}
-        </button>
-        <button
-          class="px-3 py-1 bg-green-700 hover:bg-green-600 disabled:bg-zinc-700 disabled:text-zinc-500"
-          onclick={handleMarkOut}
-          disabled={markIn === null}
-        >
-          Mark Out
-        </button>
-        <button
-          class="px-3 py-1 bg-amber-700 hover:bg-amber-600 disabled:bg-zinc-700 disabled:text-zinc-500"
-          onclick={splitAtPlayhead}
-          disabled={!canSplit()}
-        >
-          Split
-        </button>
-      </div>
     </div>
 
     <div class="space-y-1">
@@ -1144,7 +1155,7 @@
   </div>
 {:else if xEmbedSrc}
   <div class="space-y-3">
-    <div class="bg-black max-w-2xl mx-auto border border-zinc-700 rounded overflow-hidden">
+    <div class="bg-black max-w-2xl mx-auto border border-zinc-700 overflow-hidden">
       <iframe
         src={xEmbedSrc}
         title="X post video player"
@@ -1159,6 +1170,56 @@
 
     <div class="text-sm text-zinc-400 bg-zinc-900/50 px-3 py-2 border border-zinc-800">
       X preview is view-only. Timeline editing still requires a local video file.
+    </div>
+
+    {#if invalidSegmentCount > 0}
+      <div class="text-sm text-yellow-400 bg-yellow-900/30 px-3 py-2 border border-yellow-800/50">
+        {invalidSegmentCount} segment{invalidSegmentCount > 1 ? 's have' : ' has'} invalid timecode format
+      </div>
+    {/if}
+
+    {#if segments.length > 0}
+      <div class="space-y-1">
+        <div class="text-xs text-zinc-500">Segments ({segments.length})</div>
+        <div class="flex flex-wrap gap-1">
+          {#each segments as seg, i}
+            {@const palette = numberToAccentPalette(i)}
+            <div
+              class="text-xs px-2 py-0.5 inline-flex items-center gap-1 transition-colors"
+              role="group"
+              aria-label={`Segment ${i + 1}`}
+              onmouseenter={() => hoveredSegment = i}
+              onmouseleave={() => hoveredSegment = -1}
+              style="background-color: {isSegmentHighlighted(i) ? palette.fillStrong : palette.fillMuted}; color: {isSegmentHighlighted(i) ? 'white' : palette.text};"
+            >
+              <span>{seg[0]}–{seg[1]}</span>
+              <button
+                class="text-red-400 hover:text-red-300 text-[10px]"
+                tabindex={-1}
+                onclick={(e: Event) => { e.stopPropagation(); removeSegment(i); }}
+              >x</button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
+{:else if telegramEmbedSrc}
+  <div class="space-y-3">
+    <div class="bg-black max-w-2xl mx-auto border border-zinc-700 overflow-hidden">
+      <iframe
+        src={telegramEmbedSrc}
+        title="Telegram post video player"
+        class="w-full"
+        style="height: 800px; border: none; display: block;"
+        allow="autoplay; fullscreen"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen
+      ></iframe>
+    </div>
+
+    <div class="text-sm text-zinc-400 bg-zinc-900/50 px-3 py-2 border border-zinc-800">
+      Telegram preview is view-only. Timeline editing still requires a local video file.
     </div>
 
     {#if invalidSegmentCount > 0}

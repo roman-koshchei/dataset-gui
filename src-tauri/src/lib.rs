@@ -3,15 +3,20 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
-use std::sync::Mutex;
-use tauri::{Emitter, State};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager, State};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 struct CliArgs {
     images_dir: Option<String>,
     labels_dir: Option<String>,
+    dataset_kit_dir: Option<String>,
 }
 
 fn parse_cli_args() -> CliArgs {
@@ -36,6 +41,14 @@ fn parse_cli_args() -> CliArgs {
                     i += 1;
                 }
             }
+            "--dataset-kit-dir" => {
+                if i + 1 < args.len() {
+                    result.dataset_kit_dir = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
             _ => i += 1,
         }
     }
@@ -47,6 +60,7 @@ fn get_cli_args(cli_args: State<'_, CliArgs>) -> CliArgs {
     CliArgs {
         images_dir: cli_args.images_dir.clone(),
         labels_dir: cli_args.labels_dir.clone(),
+        dataset_kit_dir: cli_args.dataset_kit_dir.clone(),
     }
 }
 
@@ -102,6 +116,21 @@ struct WatcherEntry {
 
 struct WatchState {
     watchers: HashMap<String, WatcherEntry>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum JobKind {
+    Split,
+    Annotate,
+}
+
+struct ProcessJob {
+    child: Arc<Mutex<Child>>,
+    kind: JobKind,
+}
+
+struct JobRegistry {
+    jobs: HashMap<String, ProcessJob>,
 }
 
 fn parse_yolo_line(line: &str) -> Result<DatasetLabel, String> {
@@ -336,7 +365,7 @@ fn matches_filter(item: &DatasetItem, index: usize, filter: &FilterParams) -> bo
 }
 
 #[tauri::command]
-fn prepare_dataset_load(
+async fn prepare_dataset_load(
     state: State<'_, Mutex<DatasetLoadState>>,
     load_id: String,
     dirs: Vec<DatasetDir>,
@@ -365,7 +394,7 @@ fn prepare_dataset_load(
 }
 
 #[tauri::command]
-fn load_prepared_dataset_batch(
+async fn load_prepared_dataset_batch(
     state: State<'_, Mutex<DatasetLoadState>>,
     load_id: String,
     offset: usize,
@@ -403,7 +432,7 @@ fn clear_prepared_dataset_load(
 }
 
 #[tauri::command]
-fn load_and_store_batch(
+async fn load_and_store_batch(
     load_state: State<'_, Mutex<DatasetLoadState>>,
     store_state: State<'_, Mutex<StoredDatasetState>>,
     load_id: String,
@@ -439,7 +468,7 @@ fn load_and_store_batch(
 }
 
 #[tauri::command]
-fn get_filtered_window(
+async fn get_filtered_window(
     state: State<'_, Mutex<StoredDatasetState>>,
     load_id: String,
     filter: FilterParams,
@@ -521,7 +550,7 @@ fn remove_stored_item(
 }
 
 #[tauri::command]
-fn resave_all_labels(
+async fn resave_all_labels(
     state: State<'_, Mutex<StoredDatasetState>>,
     load_id: String,
 ) -> Result<usize, String> {
@@ -568,7 +597,7 @@ fn clear_stored_dataset(
 }
 
 #[tauri::command]
-fn get_dataset_count(images_dir: String) -> Result<usize, String> {
+async fn get_dataset_count(images_dir: String) -> Result<usize, String> {
     let dir = Path::new(&images_dir);
     if !dir.exists() {
         return Err(format!("Directory does not exist: {}", images_dir));
@@ -578,7 +607,7 @@ fn get_dataset_count(images_dir: String) -> Result<usize, String> {
 }
 
 #[tauri::command]
-fn load_dataset_batch(
+async fn load_dataset_batch(
     images_dir: String,
     labels_dir: String,
     offset: usize,
@@ -611,7 +640,7 @@ fn load_dataset_batch(
 }
 
 #[tauri::command]
-fn load_single_item(
+async fn load_single_item(
     images_dir: String,
     labels_dir: String,
     name: String,
@@ -657,7 +686,7 @@ fn load_single_item(
 }
 
 #[tauri::command]
-fn get_sorted_image_names(images_dir: String) -> Result<Vec<String>, String> {
+async fn get_sorted_image_names(images_dir: String) -> Result<Vec<String>, String> {
     let dir = Path::new(&images_dir);
     if !dir.exists() {
         return Err(format!("Directory does not exist: {}", images_dir));
@@ -798,7 +827,7 @@ fn unwatch_directories(
 }
 
 #[tauri::command]
-fn list_video_files(dir: String) -> Result<Vec<String>, String> {
+async fn list_video_files(dir: String) -> Result<Vec<String>, String> {
     let path = Path::new(&dir);
     if !path.exists() {
         return Err(format!("Directory does not exist: {}", dir));
@@ -821,7 +850,7 @@ fn list_video_files(dir: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn list_subdirs(dir: String) -> Result<Vec<String>, String> {
+async fn list_subdirs(dir: String) -> Result<Vec<String>, String> {
     let path = Path::new(&dir);
     if !path.exists() {
         return Ok(Vec::new());
@@ -878,6 +907,560 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn is_dataset_kit_dir(path: &Path) -> bool {
+    path.join("main.py").is_file() && path.join("auto_annotate.py").is_file()
+}
+
+fn resolve_dataset_kit_dir(explicit: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(dir) = explicit.map(str::trim).filter(|dir| !dir.is_empty()) {
+        let candidate = PathBuf::from(dir);
+        if is_dataset_kit_dir(&candidate) {
+            return Ok(candidate);
+        }
+        return Err(format!(
+            "dataset-kit directory is invalid (expected main.py): {}",
+            candidate.display()
+        ));
+    }
+
+    if let Ok(env_dir) = std::env::var("DATASET_KIT_DIR") {
+        let candidate = PathBuf::from(env_dir.trim());
+        if is_dataset_kit_dir(&candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("dataset-kit"));
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join("dataset-kit"));
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for ancestor in exe.ancestors() {
+            candidates.push(ancestor.join("dataset-kit"));
+            if let Some(parent) = ancestor.parent() {
+                candidates.push(parent.join("dataset-kit"));
+            }
+        }
+    }
+
+    for candidate in candidates {
+        if is_dataset_kit_dir(&candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    Err(
+        "Could not locate dataset-kit. Pass --dataset-kit-dir or set DATASET_KIT_DIR."
+            .to_string(),
+    )
+}
+
+fn python_invocation(kit_dir: &Path) -> Command {
+    #[cfg(windows)]
+    let venv_python = kit_dir.join(".venv").join("Scripts").join("python.exe");
+    #[cfg(not(windows))]
+    let venv_python = kit_dir.join(".venv").join("bin").join("python");
+
+    if venv_python.is_file() {
+        return Command::new(venv_python);
+    }
+
+    let mut command = Command::new("uv");
+    command.arg("run").arg("python");
+    command
+}
+
+fn spawn_job_reader<R: std::io::Read + Send + 'static>(
+    app: tauri::AppHandle,
+    video_id: String,
+    event_name: String,
+    stream: &'static str,
+    reader: R,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let buffered = BufReader::new(reader);
+        for line in buffered.lines() {
+            let Ok(line) = line else { break };
+            let _ = app.emit(
+                event_name.as_str(),
+                serde_json::json!({
+                    "videoId": video_id,
+                    "stream": stream,
+                    "line": line,
+                }),
+            );
+        }
+    })
+}
+
+fn run_background_process(
+    app: tauri::AppHandle,
+    registry: &Mutex<JobRegistry>,
+    key: String,
+    kind: JobKind,
+    event_base: &'static str,
+    mut command: Command,
+) -> Result<(), String> {
+    {
+        let state = registry.lock().map_err(|e| e.to_string())?;
+        if state.jobs.contains_key(&key) {
+            return Err(format!(
+                "A dataset-kit job is already running for {}",
+                key
+            ));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start dataset-kit via uv: {}", e))?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let child = Arc::new(Mutex::new(child));
+
+    {
+        let mut state = registry.lock().map_err(|e| e.to_string())?;
+        state.jobs.insert(
+            key.clone(),
+            ProcessJob {
+                child: Arc::clone(&child),
+                kind,
+            },
+        );
+    }
+
+    let app_handle = app.clone();
+    let job_key = key.clone();
+    let progress_event = format!("{}-progress", event_base);
+    let done_event = format!("{}-done", event_base);
+    let error_event = format!("{}-error", event_base);
+
+    std::thread::spawn(move || {
+        let stdout_handle = stdout.map(|out| {
+            spawn_job_reader(
+                app_handle.clone(),
+                job_key.clone(),
+                progress_event.clone(),
+                "stdout",
+                out,
+            )
+        });
+        let stderr_handle = stderr.map(|err| {
+            spawn_job_reader(
+                app_handle.clone(),
+                job_key.clone(),
+                progress_event.clone(),
+                "stderr",
+                err,
+            )
+        });
+        if let Some(handle) = stdout_handle {
+            let _ = handle.join();
+        }
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
+        }
+
+        let wait_result = {
+            let mut guard = child.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.wait()
+        };
+
+        if let Some(state) = app_handle.try_state::<Mutex<JobRegistry>>() {
+            if let Ok(mut state) = state.lock() {
+                state.jobs.remove(&job_key);
+            }
+        }
+
+        match wait_result {
+            Ok(status) if status.success() => {
+                let _ = app_handle.emit(
+                    done_event.as_str(),
+                    serde_json::json!({
+                        "videoId": job_key,
+                        "success": true,
+                        "code": status.code(),
+                    }),
+                );
+            }
+            Ok(status) => {
+                let _ = app_handle.emit(
+                    done_event.as_str(),
+                    serde_json::json!({
+                        "videoId": job_key,
+                        "success": false,
+                        "code": status.code(),
+                    }),
+                );
+            }
+            Err(err) => {
+                let _ = app_handle.emit(
+                    error_event.as_str(),
+                    serde_json::json!({
+                        "videoId": job_key,
+                        "error": err.to_string(),
+                    }),
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn cancel_job(registry: &Mutex<JobRegistry>, key: &str) -> Result<(), String> {
+    let child = {
+        let state = registry.lock().map_err(|e| e.to_string())?;
+        state.jobs.get(key).map(|job| Arc::clone(&job.child))
+    };
+    if let Some(child) = child {
+        let mut guard = child.lock().map_err(|e| e.to_string())?;
+        guard
+            .kill()
+            .map_err(|e| format!("Failed to cancel job: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn resolve_dataset_kit(dataset_kit_dir: Option<String>) -> Result<String, String> {
+    resolve_dataset_kit_dir(dataset_kit_dir.as_deref())
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn start_video_split(
+    app: tauri::AppHandle,
+    state: State<'_, Mutex<JobRegistry>>,
+    data_json: String,
+    project_dir: String,
+    videos_dir: Option<String>,
+    video_id: String,
+    dataset_kit_dir: Option<String>,
+) -> Result<(), String> {
+    let video_id = video_id.trim().to_string();
+    if video_id.is_empty() {
+        return Err("videoId is required".to_string());
+    }
+
+    let kit_dir = resolve_dataset_kit_dir(dataset_kit_dir.as_deref())?;
+    if !Path::new(&data_json).is_file() {
+        return Err(format!("data.json not found: {}", data_json));
+    }
+
+    let mut command = python_invocation(&kit_dir);
+    command
+        .arg("-u")
+        .arg("main.py")
+        .arg("split-video-segments")
+        .arg("--data-json")
+        .arg(&data_json)
+        .arg("--project-dir")
+        .arg(&project_dir)
+        .arg("--video-id")
+        .arg(&video_id)
+        .current_dir(&kit_dir);
+
+    if let Some(videos_dir) = videos_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+    {
+        command.arg("--videos-dir").arg(videos_dir);
+    }
+
+    run_background_process(
+        app,
+        state.inner(),
+        video_id,
+        JobKind::Split,
+        "video-split",
+        command,
+    )
+}
+
+#[tauri::command]
+fn cancel_video_split(state: State<'_, Mutex<JobRegistry>>, video_id: String) -> Result<(), String> {
+    cancel_job(state.inner(), &video_id)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn start_video_annotate(
+    app: tauri::AppHandle,
+    state: State<'_, Mutex<JobRegistry>>,
+    data_json: String,
+    project_dir: String,
+    videos_dir: Option<String>,
+    video_id: String,
+    classes: Vec<String>,
+    class_id: Option<i64>,
+    every_n: Option<i64>,
+    write_all: Option<bool>,
+    moondream_model: Option<String>,
+    dataset_kit_dir: Option<String>,
+) -> Result<(), String> {
+    let video_id = video_id.trim().to_string();
+    if video_id.is_empty() {
+        return Err("videoId is required".to_string());
+    }
+
+    let classes: Vec<String> = classes
+        .into_iter()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+    if classes.is_empty() {
+        return Err("At least one class name is required".to_string());
+    }
+
+    {
+        let registry = state.lock().map_err(|e| e.to_string())?;
+        if registry
+            .jobs
+            .values()
+            .any(|job| job.kind == JobKind::Annotate)
+        {
+            return Err("Another auto-annotation is already running".to_string());
+        }
+    }
+
+    let kit_dir = resolve_dataset_kit_dir(dataset_kit_dir.as_deref())?;
+    if !Path::new(&data_json).is_file() {
+        return Err(format!("data.json not found: {}", data_json));
+    }
+
+    let mut command = python_invocation(&kit_dir);
+    command
+        .arg("-u")
+        .arg("main.py")
+        .arg("auto-annotate-video-segments")
+        .arg("--data-json")
+        .arg(&data_json)
+        .arg("--project-dir")
+        .arg(&project_dir)
+        .arg("--video-id")
+        .arg(&video_id)
+        .arg("--class-id")
+        .arg(class_id.unwrap_or(0).to_string())
+        .arg("--every-n")
+        .arg(every_n.unwrap_or(1).max(1).to_string())
+        .arg("--moondream-model")
+        .arg(moondream_model.as_deref().unwrap_or("moondream2"));
+
+    if let Some(videos_dir) = videos_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+    {
+        command.arg("--videos-dir").arg(videos_dir);
+    }
+    if write_all.unwrap_or(false) {
+        command.arg("--write-all");
+    }
+    command.arg("--classes");
+    for class_name in &classes {
+        command.arg(class_name);
+    }
+    command.current_dir(&kit_dir);
+
+    run_background_process(
+        app,
+        state.inner(),
+        video_id,
+        JobKind::Annotate,
+        "video-annotate",
+        command,
+    )
+}
+
+#[tauri::command]
+fn cancel_video_annotate(
+    state: State<'_, Mutex<JobRegistry>>,
+    video_id: String,
+) -> Result<(), String> {
+    cancel_job(state.inner(), &video_id)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoAnnotateStatus {
+    status: String,
+    total_frames: usize,
+    processed_frames: usize,
+}
+
+fn image_file_count(dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().map(|kind| kind.is_file()).unwrap_or(false))
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            matches!(
+                name.rsplit('.').next(),
+                Some("png" | "jpg" | "jpeg" | "bmp" | "webp" | "tif" | "tiff" | "gif")
+            )
+        })
+        .count()
+}
+
+fn processed_frame_count(segment_dir: &Path) -> usize {
+    let Ok(content) = fs::read_to_string(segment_dir.join("processed.json")) else {
+        return 0;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return 0;
+    };
+    value
+        .get("files")
+        .and_then(|files| files.as_array())
+        .map(|files| files.len())
+        .unwrap_or(0)
+}
+
+fn expected_frame_count(total: usize, every_n: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    if every_n <= 1 {
+        return total;
+    }
+    if total < every_n {
+        return 1;
+    }
+    (total - every_n) / every_n + 1
+}
+
+fn scan_annotate_status(video_dir: &Path, every_n: usize) -> Option<AutoAnnotateStatus> {
+    let entries = fs::read_dir(video_dir).ok()?;
+    let mut total_frames = 0usize;
+    let mut processed_frames = 0usize;
+    let mut expected_frames = 0usize;
+
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let segment_dir = entry.path();
+        let frames_dir = segment_dir.join("frames");
+        if !frames_dir.is_dir() {
+            continue;
+        }
+        let total = image_file_count(&frames_dir);
+        if total == 0 {
+            continue;
+        }
+        total_frames += total;
+        expected_frames += expected_frame_count(total, every_n);
+        processed_frames += processed_frame_count(&segment_dir).min(total);
+    }
+
+    if expected_frames == 0 {
+        return None;
+    }
+
+    let status = if processed_frames >= expected_frames {
+        "completed"
+    } else if processed_frames == 0 {
+        "notStarted"
+    } else {
+        "partial"
+    };
+
+    Some(AutoAnnotateStatus {
+        status: status.to_string(),
+        total_frames,
+        processed_frames,
+    })
+}
+
+#[tauri::command]
+async fn get_auto_annotate_statuses(
+    videos_dir: String,
+    every_n: Option<usize>,
+) -> Result<HashMap<String, AutoAnnotateStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let every_n = every_n.unwrap_or(1).max(1);
+        let root = Path::new(&videos_dir);
+        if !root.is_dir() {
+            return Ok(HashMap::new());
+        }
+
+        let mut statuses = HashMap::new();
+        let entries =
+            fs::read_dir(root).map_err(|e| format!("Failed to read videos dir: {}", e))?;
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let video_id = entry.file_name().to_string_lossy().to_string();
+            if let Some(status) = scan_annotate_status(&entry.path(), every_n) {
+                statuses.insert(video_id, status);
+            }
+        }
+        Ok(statuses)
+    })
+    .await
+    .map_err(|e| format!("Status scan task failed: {}", e))?
+}
+
+#[tauri::command]
+async fn get_segment_folders(
+    videos_dir: String,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = Path::new(&videos_dir);
+        if !root.is_dir() {
+            return Ok(HashMap::new());
+        }
+
+        let mut folders: HashMap<String, Vec<String>> = HashMap::new();
+        let entries =
+            fs::read_dir(root).map_err(|e| format!("Failed to read videos dir: {}", e))?;
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let video_id = entry.file_name().to_string_lossy().to_string();
+            let mut subdirs: Vec<String> = Vec::new();
+            if let Ok(sub_entries) = fs::read_dir(entry.path()) {
+                for sub_entry in sub_entries.filter_map(|sub| sub.ok()) {
+                    if sub_entry
+                        .file_type()
+                        .map(|kind| kind.is_dir())
+                        .unwrap_or(false)
+                    {
+                        subdirs.push(sub_entry.file_name().to_string_lossy().to_string());
+                    }
+                }
+            }
+            if !subdirs.is_empty() {
+                subdirs.sort();
+                folders.insert(video_id, subdirs);
+            }
+        }
+        Ok(folders)
+    })
+    .await
+    .map_err(|e| format!("Segment folder scan task failed: {}", e))?
+}
+
 #[tauri::command]
 fn frontend_log(message: String) {
     println!("{}", message);
@@ -899,6 +1482,9 @@ pub fn run() {
         }))
         .manage(Mutex::new(StoredDatasetState {
             datasets: HashMap::new(),
+        }))
+        .manage(Mutex::new(JobRegistry {
+            jobs: HashMap::new(),
         }))
         .manage(cli_args)
         .invoke_handler(tauri::generate_handler![
@@ -924,6 +1510,13 @@ pub fn run() {
             list_subdirs,
             reveal_in_file_manager,
             get_cli_args,
+            resolve_dataset_kit,
+            start_video_split,
+            cancel_video_split,
+            start_video_annotate,
+            cancel_video_annotate,
+            get_auto_annotate_statuses,
+            get_segment_folders,
             frontend_log,
         ])
         .run(tauri::generate_context!())

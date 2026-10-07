@@ -13,6 +13,7 @@ export type VideoEntry = {
   tags: string[];
   keep_segments?: string[][];
   masks?: VideoMask[];
+  irrelevant?: boolean;
 };
 
 export type VideoCollection = {
@@ -86,8 +87,38 @@ export function buildXEmbedUrl(url: string): string | null {
   return statusId ? `https://platform.twitter.com/embed/Tweet.html?id=${statusId}&embedId=twitter-widget-0&frame=false&hideCard=false&hideThread=true&theme=dark` : null;
 }
 
+export function extractTelegramId(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    if (host !== "t.me" && host !== "telegram.me") return null;
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    if (pathParts[0]?.toLowerCase() === "s") pathParts.shift();
+    if (pathParts.length < 2 || !/^\d+$/.test(pathParts[1])) return null;
+    const channel = pathParts[0].toLowerCase().replace(/[^a-z0-9_]/g, "");
+    if (!channel) return null;
+    return `telegram_${channel}_${pathParts[1]}`;
+  } catch {
+    return null;
+  }
+}
+
+export function buildTelegramEmbedUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    if (host !== "t.me" && host !== "telegram.me") return null;
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    if (pathParts[0]?.toLowerCase() === "s") pathParts.shift();
+    if (pathParts.length < 2 || !/^\d+$/.test(pathParts[1])) return null;
+    return `https://t.me/${pathParts[0]}/${pathParts[1]}?embed=1`;
+  } catch {
+    return null;
+  }
+}
+
 export function extractVideoId(url: string): string | null {
-  return extractYouTubeId(url) ?? extractXId(url);
+  return extractYouTubeId(url) ?? extractXId(url) ?? extractTelegramId(url);
 }
 
 export function extractFileStem(file: string): string | null {
@@ -129,6 +160,14 @@ export function formatTimecode(seconds: number): string {
     return `${m}:${whole.toString().padStart(2, "0")}.${ms.toString().padStart(3, "0")}`;
   }
   return `${m}:${whole.toString().padStart(2, "0")}`;
+}
+
+export function sortSegments(segments: string[][]): string[][] {
+  return [...segments].sort((a, b) => {
+    const startDiff = parseTimecode(a[0]) - parseTimecode(b[0]);
+    if (startDiff !== 0) return startDiff;
+    return parseTimecode(a[1]) - parseTimecode(b[1]);
+  });
 }
 
 export function segmentToFolderName(segment: string[]): string {

@@ -357,14 +357,14 @@
         const newLeft = Math.max(
           0,
           Math.min(
-            dragStartLabel.left + dragStartLabel.width - 0.01,
+            dragStartLabel.left + dragStartLabel.width - 0.001,
             dragStartLabel.left + deltaX
           )
         );
         const newTop = Math.max(
           0,
           Math.min(
-            dragStartLabel.top + dragStartLabel.height - 0.01,
+            dragStartLabel.top + dragStartLabel.height - 0.001,
             dragStartLabel.top + deltaY
           )
         );
@@ -376,12 +376,12 @@
         const newTop = Math.max(
           0,
           Math.min(
-            dragStartLabel.top + dragStartLabel.height - 0.01,
+            dragStartLabel.top + dragStartLabel.height - 0.001,
             dragStartLabel.top + deltaY
           )
         );
         label.width = Math.max(
-          0.01,
+          0.001,
           Math.min(1 - dragStartLabel.left, dragStartLabel.width + deltaX)
         );
         label.height = dragStartLabel.top + dragStartLabel.height - newTop;
@@ -390,30 +390,30 @@
         const newLeft = Math.max(
           0,
           Math.min(
-            dragStartLabel.left + dragStartLabel.width - 0.01,
+            dragStartLabel.left + dragStartLabel.width - 0.001,
             dragStartLabel.left + deltaX
           )
         );
         label.width = dragStartLabel.left + dragStartLabel.width - newLeft;
         label.height = Math.max(
-          0.01,
+          0.001,
           Math.min(1 - dragStartLabel.top, dragStartLabel.height + deltaY)
         );
         label.left = newLeft;
       } else if (mouseAction.handle === "br") {
         label.width = Math.max(
-          0.01,
+          0.001,
           Math.min(1 - dragStartLabel.left, dragStartLabel.width + deltaX)
         );
         label.height = Math.max(
-          0.01,
+          0.001,
           Math.min(1 - dragStartLabel.top, dragStartLabel.height + deltaY)
         );
       } else if (mouseAction.handle === "t") {
         const newTop = Math.max(
           0,
           Math.min(
-            dragStartLabel.top + dragStartLabel.height - 0.01,
+            dragStartLabel.top + dragStartLabel.height - 0.001,
             dragStartLabel.top + deltaY
           )
         );
@@ -421,14 +421,14 @@
         label.top = newTop;
       } else if (mouseAction.handle === "b") {
         label.height = Math.max(
-          0.01,
+          0.001,
           Math.min(1 - dragStartLabel.top, dragStartLabel.height + deltaY)
         );
       } else if (mouseAction.handle === "l") {
         const newLeft = Math.max(
           0,
           Math.min(
-            dragStartLabel.left + dragStartLabel.width - 0.01,
+            dragStartLabel.left + dragStartLabel.width - 0.001,
             dragStartLabel.left + deltaX
           )
         );
@@ -436,7 +436,7 @@
         label.left = newLeft;
       } else if (mouseAction.handle === "r") {
         label.width = Math.max(
-          0.01,
+          0.001,
           Math.min(1 - dragStartLabel.left, dragStartLabel.width + deltaX)
         );
       }

@@ -12,10 +12,14 @@
     active,
     openDatasetInNewTab,
     initialState,
+    label,
+    onTitleChange,
   }: {
     active: boolean;
     openDatasetInNewTab?: (dataset: Dataset, label: string) => void;
     initialState?: Dataset;
+    label?: string;
+    onTitleChange?: (title: string) => void;
   } = $props();
 
   type ViewMode = "start" | "dataset" | "videos";
@@ -28,6 +32,7 @@
   let videoError = $state("");
   let videoDataPath = $state("");
   let videosDir = $state("");
+  let datasetKitDir = $state("");
 
   $effect.pre(() => {
     if (initialDatasetApplied || !initialState) return;
@@ -38,6 +43,12 @@
       const dir = initialState.dirs[0];
       void pushToHistory(dir.imagesDir, dir.labelsDir);
     }
+  });
+
+  $effect(() => {
+    if (!active) return;
+    const title = viewMode === "videos" && videoDataPath ? videoDataPath : label ?? "";
+    onTitleChange?.(title);
   });
 
   let store: Awaited<ReturnType<typeof load>> | null = null;
@@ -51,6 +62,7 @@
       const s = await getStore();
       await s.set("videoDataPath", videoDataPath);
       await s.set("videosDir", videosDir);
+      await s.set("datasetKitDir", datasetKitDir);
       await s.save();
     } catch { }
   }
@@ -243,6 +255,15 @@
               bind:value={videosDir}
             />
           </label>
+          <label class="space-y-2 block">
+            dataset-kit directory <span class="text-zinc-500">(auto-detected sibling if left empty)</span>
+            <input
+              type="text"
+              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+              placeholder="D:\Systems\detection-research\dataset-kit"
+              bind:value={datasetKitDir}
+            />
+          </label>
           {#if videoError}
             <p class="text-red-500 text-sm">{videoError}</p>
           {/if}
@@ -305,6 +326,6 @@
   {:else if viewMode === "dataset"}
     <DatasetGrid dataset={dataset!} />
   {:else if viewMode === "videos"}
-    <VideoManagement dataPath={videoDataPath} {videosDir} onBack={() => viewMode = "start"} {openDatasetInNewTab} />
+    <VideoManagement dataPath={videoDataPath} {videosDir} {datasetKitDir} onBack={() => viewMode = "start"} {openDatasetInNewTab} />
   {/if}
 </div>
