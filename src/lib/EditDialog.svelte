@@ -30,6 +30,7 @@
   let saveStatus = $state<"saving" | "saved" | "error" | null>(null);
   let viewMode = $state<ViewMode>("rgb");
   let auxLoadFailed = $state(false);
+  let loadedAuxSrc = $state("");
 
   let imageContainer = $state<HTMLDivElement | undefined>(undefined);
   let imgEl = $state<HTMLImageElement | undefined>(undefined);
@@ -66,12 +67,42 @@
   let lastMouseNormY = -1;
 
   let auxImageSrc = $derived(() => item ? getAuxImageSrc(item.imageSrc) : "");
+  let auxAvailable = $derived(() => !!auxImageSrc() && loadedAuxSrc === auxImageSrc() && !auxLoadFailed);
   let displayedImageSrc = $derived(() => {
     if (!item) return "";
-    if (viewMode === "aux" && !auxLoadFailed) return auxImageSrc();
+    if (viewMode === "aux" && auxAvailable()) return auxImageSrc();
     return item.imageSrc;
   });
-  let showAuxOverlay = $derived(() => viewMode === "overlay" && !auxLoadFailed && auxImageSrc().length > 0);
+  let showAuxOverlay = $derived(() => viewMode === "overlay" && auxAvailable());
+
+  // A derived filename does not prove the auxiliary image exists. Probe it
+  // before enabling either layer, and ignore results after navigating away.
+  $effect(() => {
+    const source = auxImageSrc();
+    loadedAuxSrc = "";
+    auxLoadFailed = false;
+    if (!source) {
+      viewMode = "rgb";
+      return;
+    }
+
+    let active = true;
+    const probe = new Image();
+    probe.onload = () => {
+      if (active) loadedAuxSrc = source;
+    };
+    probe.onerror = () => {
+      if (!active) return;
+      auxLoadFailed = true;
+      viewMode = "rgb";
+    };
+    probe.src = source;
+    return () => {
+      active = false;
+      probe.onload = null;
+      probe.onerror = null;
+    };
+  });
 
   $effect(() => {
     if (!dialog) return;
@@ -237,8 +268,8 @@
   }
 
   function setViewMode(mode: ViewMode) {
+    if (mode !== "rgb" && !auxAvailable()) return;
     viewMode = mode;
-    auxLoadFailed = false;
   }
 
   function resetView() {
@@ -464,7 +495,7 @@
 
 <dialog
   bind:this={dialog}
-  class="hidden open:grid grid-cols-[1fr_20rem] h-full w-full outline-none m-auto border border-zinc-700 bg-zinc-900 backdrop:bg-zinc-900/75"
+  class="hidden open:grid grid-cols-[minmax(0,1fr)_19rem] h-full w-full outline-none m-auto border border-zinc-700 bg-zinc-900 backdrop:bg-zinc-900/75"
 >
   {#if item}
     <div bind:this={viewportEl} class="h-full w-full overflow-hidden relative" style="cursor: {isPanning ? 'grabbing' : spaceHeld ? 'grab' : 'default'}">
@@ -537,32 +568,32 @@
       </div>
     </div>
 
-    <div class="bg-zinc-900 p-5 border-l border-zinc-700 space-y-3">
-      <div class="flex gap-2 items-center">
+    <div class="editor-sidebar min-h-0 overflow-y-auto bg-zinc-900 p-4 border-l border-zinc-700 space-y-4">
+      <div class="ui-controls">
         <button
-          class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
+          class="py-1.5 px-3 bg-zinc-700 text-white hover:bg-zinc-600 disabled:opacity-50"
           onclick={() => navigate(() => onPrev?.())}
           disabled={!onPrev}
         >
           Prev
         </button>
         <button
-          class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
+          class="py-1.5 px-3 bg-zinc-700 text-white hover:bg-zinc-600 disabled:opacity-50"
           onclick={() => navigate(() => onNext?.())}
           disabled={!onNext}
         >
           Next
         </button>
         <button
-          class="py-2 px-3 bg-zinc-200 hover:bg-zinc-300"
+          class="py-1.5 px-3 bg-zinc-700 text-white hover:bg-zinc-600"
           onclick={handleClose}
         >
           Close
         </button>
-        <span class="ml-auto text-sm text-zinc-400">Labels: {item.labels.length}{#if isSelectedAny()} ({selectedLabelIndices.size} selected){/if}</span>
+        <span class="w-full text-xs text-zinc-400">Labels: {item.labels.length}{#if isSelectedAny()} ({selectedLabelIndices.size} selected){/if}</span>
       </div>
 
-      <div class="flex gap-2 items-center text-white">
+      <div class="ui-controls text-white">
         <button
           class="py-1 px-2.5 bg-zinc-700 hover:bg-zinc-600 text-white"
           onclick={() => {
@@ -590,12 +621,12 @@
         </button>
       </div>
 
-      <div class="space-y-1 text-white">
+      <div class="ui-section space-y-2 text-white">
         <div class="text-sm text-zinc-400">View layer</div>
-        <div class="flex gap-2">
+        <div class="ui-controls">
           <button
             class={[
-              "py-1 px-2.5 text-sm text-white",
+              "py-1 px-2.5 text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-zinc-700",
               viewMode === "rgb" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600",
             ]}
             onclick={() => setViewMode("rgb")}
@@ -604,21 +635,23 @@
           </button>
           <button
             class={[
-              "py-1 px-2.5 text-sm text-white",
+              "py-1 px-2.5 text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-zinc-700",
               viewMode === "aux" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600",
             ]}
             onclick={() => setViewMode("aux")}
-            disabled={!auxImageSrc()}
+            disabled={!auxAvailable()}
+            title={auxAvailable() ? undefined : "Auxiliary image unavailable"}
           >
             Aux
           </button>
           <button
             class={[
-              "py-1 px-2.5 text-sm text-white",
+              "py-1 px-2.5 text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-zinc-700",
               viewMode === "overlay" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600",
             ]}
             onclick={() => setViewMode("overlay")}
-            disabled={!auxImageSrc()}
+            disabled={!auxAvailable()}
+            title={auxAvailable() ? undefined : "Auxiliary image unavailable"}
           >
             Overlay
           </button>
@@ -628,11 +661,11 @@
         {/if}
       </div>
 
-      <label class="block text-white">
+      <label class="block text-sm text-zinc-300">
         Class ID
         <input
           type="number"
-          class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+          class="ui-field mt-1 min-w-0 w-full tabular-nums border border-zinc-700 focus:bg-zinc-800 transition-colors"
           bind:value={
             () =>
               isSelectedSingleValid()
@@ -651,15 +684,15 @@
       </label>
 
       <div class="grid grid-cols-2 gap-2">
-        <label class="block text-white">
+        <label class="block text-sm text-zinc-300">
           Top
           <input
             type="number"
-            class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+            class="ui-field mt-1 min-w-0 w-full tabular-nums border border-zinc-700 focus:bg-zinc-800 transition-colors"
             bind:value={
               () =>
                 isSelectedSingleValid()
-                  ? item.labels[getSingleSelectedIndex()].top
+                  ? Number(item.labels[getSingleSelectedIndex()].top.toFixed(5))
                   : null,
               (v) => {
                 if (isSelectedSingleValid()) {
@@ -675,15 +708,15 @@
           />
         </label>
 
-        <label class="block text-white">
+        <label class="block text-sm text-zinc-300">
           Left
           <input
             type="number"
-            class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+            class="ui-field mt-1 min-w-0 w-full tabular-nums border border-zinc-700 focus:bg-zinc-800 transition-colors"
             bind:value={
               () =>
                 isSelectedSingleValid()
-                  ? item.labels[getSingleSelectedIndex()].left
+                  ? Number(item.labels[getSingleSelectedIndex()].left.toFixed(5))
                   : null,
               (v) => {
                 if (isSelectedSingleValid()) {
@@ -699,7 +732,7 @@
           />
         </label>
 
-        <label class="block text-white">
+        <label class="block text-sm text-zinc-300">
           Width
           {#if isSelectedSingleValid() && imgEl?.naturalWidth}
             <span class="text-zinc-500 text-xs">
@@ -708,11 +741,11 @@
           {/if}
           <input
             type="number"
-            class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+            class="ui-field mt-1 min-w-0 w-full tabular-nums border border-zinc-700 focus:bg-zinc-800 transition-colors"
             bind:value={
               () =>
                 isSelectedSingleValid()
-                  ? item.labels[getSingleSelectedIndex()].width
+                  ? Number(item.labels[getSingleSelectedIndex()].width.toFixed(5))
                   : null,
               (v) => {
                 if (isSelectedSingleValid()) {
@@ -728,7 +761,7 @@
           />
         </label>
 
-        <label class="block text-white">
+        <label class="block text-sm text-zinc-300">
           Height
           {#if isSelectedSingleValid() && imgEl?.naturalHeight}
             <span class="text-zinc-500 text-xs">
@@ -737,11 +770,11 @@
           {/if}
           <input
             type="number"
-            class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+            class="ui-field mt-1 min-w-0 w-full tabular-nums border border-zinc-700 focus:bg-zinc-800 transition-colors"
             bind:value={
               () =>
                 isSelectedSingleValid()
-                  ? item.labels[getSingleSelectedIndex()].height
+                  ? Number(item.labels[getSingleSelectedIndex()].height.toFixed(5))
                   : null,
               (v) => {
                 if (isSelectedSingleValid()) {
@@ -758,7 +791,7 @@
         </label>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="ui-actions ui-section">
         <button
           class="py-2 px-3 bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
           onclick={performSave}
@@ -775,42 +808,45 @@
         {/if}
       </div>
 
-      <button
-        class="block py-2 px-3 bg-sky-600 text-white hover:bg-blue-700"
-        onclick={() => {
-          item.labels.push({
-            classId: 0,
-            top: 0.5,
-            left: 0.5,
-            height: 0.05,
-            width: 0.05,
-          });
-          selectedLabelIndices = new Set([item.labels.length - 1]);
-          hasUnsavedChanges = true;
-        }}
-      >
-        Add label
-      </button>
-
-      <button
-        class="block py-2 px-3 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
-        disabled={!isSelectedAny()}
-        onclick={() => {
-          if (isSelectedAny()) {
-            const sorted = [...selectedLabelIndices].sort((a, b) => b - a);
-            for (const idx of sorted) {
-              item.labels.splice(idx, 1);
-            }
-            clearSelection();
+      <div class="ui-actions">
+        <button
+          class="block py-2 px-3 bg-sky-600 text-white hover:bg-blue-700"
+          onclick={() => {
+            item.labels.push({
+              classId: 0,
+              top: 0.5,
+              left: 0.5,
+              height: 0.05,
+              width: 0.05,
+            });
+            selectedLabelIndices = new Set([item.labels.length - 1]);
             hasUnsavedChanges = true;
-          }
-        }}
-      >
-        Delete{#if selectedLabelIndices.size > 1} {selectedLabelIndices.size} selected{/if} label{#if selectedLabelIndices.size !== 1}s{/if}
-      </button>
+          }}
+        >
+          Add label
+        </button>
+
+        <button
+          class="block py-2 px-3 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+          disabled={!isSelectedAny()}
+          onclick={() => {
+            if (isSelectedAny()) {
+              const sorted = [...selectedLabelIndices].sort((a, b) => b - a);
+              for (const idx of sorted) {
+                item.labels.splice(idx, 1);
+              }
+              clearSelection();
+              hasUnsavedChanges = true;
+            }
+          }}
+        >
+          Delete{#if selectedLabelIndices.size > 1} {selectedLabelIndices.size} selected{/if} label{#if selectedLabelIndices.size !== 1}s{/if}
+        </button>
+
+      </div>
 
       <button
-        class="block py-2 px-3 bg-zinc-200 hover:bg-zinc-300 disabled:opacity-50"
+        class="block py-1.5 px-3 text-sm bg-zinc-700 text-white hover:bg-zinc-600 disabled:opacity-50"
         disabled={!isSelectedAny()}
         onclick={() => {
           clearSelection();
@@ -820,8 +856,8 @@
       </button>
 
       {#if isSelectedSingleValid()}
-        <p class="block py-2 px-3 bg-zinc-200">
-          Normalized area: {normArea(item.labels[getSingleSelectedIndex()])}
+        <p class="text-xs text-zinc-400 tabular-nums">
+          Normalized area: {normArea(item.labels[getSingleSelectedIndex()]).toPrecision(4)}
         </p>
       {/if}
     </div>
@@ -829,6 +865,13 @@
 </dialog>
 
 <style>
+  .editor-sidebar button {
+    min-height: 32px;
+    padding: 6px 12px;
+    font-size: 14px;
+    line-height: 20px;
+  }
+
   input[type="number"]::-webkit-outer-spin-button,
   input[type="number"]::-webkit-inner-spin-button {
     -webkit-appearance: none;

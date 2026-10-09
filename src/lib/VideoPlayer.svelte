@@ -495,6 +495,41 @@
     currentTime = t;
   }
 
+  function revealSegmentInTimeline(index: number) {
+    if (duration <= 0) return;
+    const seg = parsedSegments.find((s) => s.index === index);
+    if (!seg) return;
+
+    const segStart = timeToRatio(duration, seg.start);
+    const segEnd = timeToRatio(duration, seg.end);
+    const range = zoomEnd - zoomStart;
+    const padding = range * 0.05;
+
+    if (segStart >= zoomStart + padding && segEnd <= zoomEnd - padding) {
+      return;
+    }
+
+    const segRange = segEnd - segStart;
+    const nextRange = segRange > range * 0.8
+      ? Math.min(1, Math.max(0.001, segRange / 0.8))
+      : range;
+    const center = (segStart + segEnd) / 2;
+
+    let start = center - nextRange / 2;
+    let end = center + nextRange / 2;
+
+    if (start < 0) {
+      end -= start;
+      start = 0;
+    }
+    if (end > 1) {
+      start -= end - 1;
+      end = 1;
+    }
+
+    ({ start: zoomStart, end: zoomEnd } = clampRange(start, end));
+  }
+
   function splitAtPlayhead() {
     if (!videoEl) return;
     const updated = splitSegmentsAtTime(segments, parsedSegments, videoEl.currentTime);
@@ -795,7 +830,7 @@
 </script>
 
 {#if videoSrc}
-  <div class="space-y-3">
+  <div class="space-y-4">
     <div bind:this={videoFrameEl} class="relative bg-black aspect-video max-w-2xl mx-auto overflow-hidden">
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
@@ -845,7 +880,7 @@
       </div>
     {/if}
 
-    <div class="flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Playback and segment controls">
+    <div class="ui-controls text-sm" role="group" aria-label="Playback and segment controls">
       <button
         class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600"
         onclick={() => seekTo(Math.max(0, currentTime - 1))}
@@ -902,7 +937,7 @@
       </div>
     </div>
 
-    <div class="flex items-center gap-2 text-sm flex-wrap">
+    <div class="ui-controls text-sm">
       <button
         class="px-3 py-1 {showMasks ? 'bg-zinc-500 text-white' : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'}"
         onclick={() => showMasks = !showMasks}
@@ -1089,7 +1124,7 @@
             >
               <button
                 class="hover:underline"
-                onclick={() => seekTo(parseTimecode(seg[0]))}
+                onclick={() => { revealSegmentInTimeline(i); seekTo(parseTimecode(seg[0])); }}
               >
                 {seg[0]}–{seg[1]}
               </button>
@@ -1105,7 +1140,7 @@
     {/if}
   </div>
 {:else if youtubeEmbedSrc}
-  <div class="space-y-3">
+  <div class="space-y-4">
     <div class="relative bg-black aspect-video max-w-2xl mx-auto border border-zinc-700">
       <iframe
         src={youtubeEmbedSrc}
@@ -1154,7 +1189,7 @@
     {/if}
   </div>
 {:else if xEmbedSrc}
-  <div class="space-y-3">
+  <div class="space-y-4">
     <div class="bg-black max-w-2xl mx-auto border border-zinc-700 overflow-hidden">
       <iframe
         src={xEmbedSrc}
@@ -1205,7 +1240,7 @@
     {/if}
   </div>
 {:else if telegramEmbedSrc}
-  <div class="space-y-3">
+  <div class="space-y-4">
     <div class="bg-black max-w-2xl mx-auto border border-zinc-700 overflow-hidden">
       <iframe
         src={telegramEmbedSrc}

@@ -29,3 +29,35 @@ button {
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* Shared spacing for the desktop tool. Colors remain local to each action. */
+.start-view form > button,
+.start-view label button,
+.ui-controls > button,
+.ui-actions > button {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 20px;
+}
+.ui-controls,
+.ui-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ui-section {
+  padding-top: 16px;
+  border-top: 1px solid #3f3f46;
+}
+.ui-field {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 20px;
+}
+button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}

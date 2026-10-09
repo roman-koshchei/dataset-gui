@@ -25,7 +25,7 @@
   type FilterMode = "all" | "hasBoxes" | "noBoxes" | "hasLabelFile" | "class" | "nth" | "nestedBoxes";
   const OVERSCAN_ROWS = 3;
   const IMAGE_ASPECT_RATIO = 9 / 16;
-  const CARD_CHROME_HEIGHT = 44;
+  const CARD_CHROME_HEIGHT = 56;
   const LOAD_BATCH_SIZE = 500;
   const CACHE_SIZE = 200;
   const CACHE_PREFETCH_MARGIN_ROWS = 5;
@@ -149,7 +149,7 @@
 
   let rowHeight = $derived(() => {
     const cardWidth = Math.max(1, containerWidth / columnCount());
-    return Math.ceil(cardWidth * IMAGE_ASPECT_RATIO + CARD_CHROME_HEIGHT);
+    return Math.ceil((cardWidth - 16) * IMAGE_ASPECT_RATIO + CARD_CHROME_HEIGHT);
   });
 
   let totalRows = $derived(() => Math.ceil(filteredTotal / columnCount()));
@@ -494,7 +494,7 @@
           <p class="text-center text-lg text-zinc-300">Loading dataset...</p>
           <p class="text-center text-sm">{loadProgressText()}</p>
           {#if loadProgressPercent() !== null}
-            <div class="h-2 overflow-hidden rounded bg-zinc-800 border border-zinc-700">
+            <div class="h-2 overflow-hidden bg-zinc-800 border border-zinc-700">
               <div
                 class="h-full bg-blue-500 transition-[width] duration-150"
                 style:width={`${loadProgressPercent()}%`}
@@ -530,7 +530,7 @@
                 style:grid-template-columns={`repeat(${columnCount()}, minmax(0, 1fr))`}
               >
                 {#each row.items as item (datasetItemKey(item))}
-                  <div class="p-1 h-full grid grid-rows-[auto_2rem] gap-1 overflow-hidden">
+                  <div class="group p-2 h-full grid grid-rows-[auto_2rem] gap-2 overflow-hidden">
                     <button
                       class="relative aspect-video w-full overflow-hidden"
                       onclick={() => openEditDialog(item)}
@@ -560,17 +560,17 @@
                     </button>
 
                     <div class="min-w-0 flex items-center gap-2 text-sm overflow-hidden">
-                      <p class="min-w-0 flex-1 truncate" title={item.name}>{item.name}</p>
+                      <p class="min-w-0 flex-1 truncate" title={item.name}>{getItemBaseName(item.name).split(/[/\\]/).pop()}</p>
                       <button
                         onclick={() => {
                           handleDelete(item);
                         }}
-                        class="bg-red-700 px-1 shrink-0"
+                        class="h-8 px-2 shrink-0 text-red-400 bg-red-950/40 hover:bg-red-700 hover:text-white group-hover:bg-red-900/60"
                       >
                         Delete
                       </button>
                       <button
-                        class="bg-zinc-700 px-1 shrink-0"
+                        class="h-8 bg-zinc-700 hover:bg-zinc-600 px-2 shrink-0"
                         onclick={async () => {
                           await revealPaths(
                             await Promise.all([

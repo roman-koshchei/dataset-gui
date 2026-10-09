@@ -140,27 +140,27 @@
 
 <div class={["flex-[0_0_100%]", active ? "order-first" : ""]}>
   {#if viewMode === "start"}
-    <div class="h-full overflow-y-auto grid grid-cols-2 gap-8 p-4">
-      <div class="space-y-6">
+    <div class="start-view h-full overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
+      <div class="space-y-4">
         <h2 class="text-xl">Dataset</h2>
 
-        <form onsubmit={selectDataset} class="space-y-2">
-           <label class="space-y-2 block">
+        <form onsubmit={selectDataset} class="space-y-4">
+           <label class="space-y-1 block">
              Images directory
              <input
                type="text"
-               class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+               class="ui-field w-full border border-zinc-700 focus:bg-zinc-800 transition-colors"
                placeholder="Enter images folder..."
                bind:value={imagesDir}
               oninput={() => datasetError = ""}
             />
           </label>
 
-          <label class="space-y-2 block">
+          <label class="space-y-1 block">
             Labels directory
             <input
               type="text"
-              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+              class="ui-field w-full border border-zinc-700 focus:bg-zinc-800 transition-colors"
               placeholder="Enter labels folder..."
               bind:value={labelsDir}
               oninput={() => datasetError = ""}
@@ -179,9 +179,9 @@
           </button>
         </form>
 
-        <div class="border-t border-zinc-700 pt-4 space-y-3">
+        <div class="border-t border-zinc-700 pt-4 space-y-4">
           <h3 class="text-lg">History</h3>
-          <div class="space-y-3">
+          <div class="space-y-4">
             {#each history.items as histItem}
               <div
                 class="grid grid-cols-[1fr_auto] items-stretch border border-zinc-700"
@@ -224,15 +224,15 @@
         </div>
       </div>
 
-      <div class="space-y-6">
+      <div class="space-y-4">
         <h2 class="text-xl">Video Management</h2>
-        <div class="space-y-2">
-          <label class="space-y-2 block">
+        <div class="space-y-4">
+          <label class="space-y-1 block">
             data.json path
             <div class="mt-1 flex gap-2">
               <input
                 type="text"
-                class="min-w-0 flex-1 px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+                class="ui-field min-w-0 flex-1 border border-zinc-700 focus:bg-zinc-800 transition-colors"
                 placeholder="D:\Datasets\...\data.json"
                 bind:value={videoDataPath}
                 oninput={() => videoError = ""}
@@ -246,20 +246,20 @@
               </button>
             </div>
           </label>
-          <label class="space-y-2 block">
+          <label class="space-y-1 block">
             Videos directory <span class="text-zinc-500">(defaults to ./videos alongside data.json)</span>
             <input
               type="text"
-              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+              class="ui-field w-full border border-zinc-700 focus:bg-zinc-800 transition-colors"
               placeholder="D:\Datasets\...\videos"
               bind:value={videosDir}
             />
           </label>
-          <label class="space-y-2 block">
+          <label class="space-y-1 block">
             dataset-kit directory <span class="text-zinc-500">(auto-detected sibling if left empty)</span>
             <input
               type="text"
-              class="mt-1 w-full px-3 py-2 border border-zinc-700 focus:bg-zinc-800 transition-colors"
+              class="ui-field w-full border border-zinc-700 focus:bg-zinc-800 transition-colors"
               placeholder="D:\Systems\detection-research\dataset-kit"
               bind:value={datasetKitDir}
             />
@@ -267,7 +267,7 @@
           {#if videoError}
             <p class="text-red-500 text-sm">{videoError}</p>
           {/if}
-          <div class="flex gap-2">
+          <div class="ui-actions">
             <button
               class="flex-1 bg-blue-600 py-2 px-4 hover:bg-blue-700 transition-colors"
               onclick={openVideoManagement}
@@ -283,9 +283,9 @@
           </div>
         </div>
 
-        <div class="border-t border-zinc-700 pt-4 space-y-3">
+        <div class="border-t border-zinc-700 pt-4 space-y-4">
           <h3 class="text-lg">History</h3>
-          <div class="space-y-3">
+          <div class="space-y-4">
             {#each videoHistory.items as vHistItem}
               <div class="grid grid-cols-[1fr_auto] items-stretch border border-zinc-700">
                 <button

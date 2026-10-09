@@ -6,6 +6,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import VideoPlayer from "./VideoPlayer.svelte";
+  import BboxMarkDialog from "./BboxMarkDialog.svelte";
   import type { Dataset } from "./dataset";
   import { numberToAccentPalette } from "./helpers";
 
@@ -27,6 +28,7 @@
   let error = $state("");
   let hasUnsaved = $state(false);
   let selectedVideoIndex = $state(-1);
+  let detailsPane = $state<HTMLDivElement>();
   let selectedVideoIndices = $state<number[]>([]);
   let lastSelectionAnchorVisible = $state<number | null>(null);
 
@@ -79,7 +81,7 @@
   let resolvedKitDir = $state("");
   let datasetRefresh = $state(0);
 
-  type AnnotateJobState = { status: "running" | "done" | "error"; log: string[] };
+  type AnnotateJobState = { status: "running" | "done" | "error" | "cancelled"; log: string[] };
   type AnnotateDiskStatus = { status: string; totalFrames: number; processedFrames: number };
   let annotateJobs = $state<Map<string, AnnotateJobState>>(new Map());
   let annotateStatuses = $state<Map<string, AnnotateDiskStatus>>(new Map());
@@ -89,7 +91,26 @@
   let annotateEveryN = $state(15);
   let annotateWriteAll = $state(true);
   let annotateModel = $state("moondream2");
+  let annotateUseTracking = $state(false);
+  let annotateScoreThreshold = $state(0);
+  let annotateTrackDevice = $state("");
   let annotateSettingsOpen = $state(false);
+  const PREVIEW_SUBDIR = ".preview_labels";
+  let segmentPreviewReady = $state<Map<string, boolean>>(new Map());
+  let segmentPreviewSaved = $state<Set<string>>(new Set());
+  let previewTarget = $state<{
+    videoId: string;
+    segmentFolder: string;
+    framesDir: string;
+    previewDir: string;
+  } | null>(null);
+  let trackDialog = $state<{
+    video: VideoEntry;
+    seg: string[];
+    imageSrc: string;
+    framesDir: string;
+    previewDir: string;
+  } | null>(null);
   let anyAnnotateRunning = $derived(
     [...annotateJobs.values()].some((job) => job.status === "running")
   );
@@ -198,7 +219,7 @@
     neutral: "bg-[#202226] text-[#a8adb8]",
   };
   const statusPillBase =
-    "inline-flex items-center gap-1 text-[11px] leading-[1.6] px-1.5 py-0.5 whitespace-nowrap";
+    "inline-flex items-center gap-1 text-[11px] leading-4 px-1.5 py-0.5 whitespace-nowrap";
   const statusIcon: Record<StatusVariant, string> = {
     ok: "✓",
     local: "↓",
@@ -212,6 +233,9 @@
     const job = annotateJobs.get(videoId);
     if (job?.status === "running") {
       return { label: "annotating…", variant: "warn" };
+    }
+    if (job?.status === "cancelled") {
+      return { label: "cancelled", variant: "neutral" };
     }
     if (job?.status === "error") {
       return { label: "annotate error", variant: "error" };
@@ -230,7 +254,16 @@
     return { label: "not annotated", variant: "neutral" };
   }
 
-  async function startAutoAnnotate(video: VideoEntry) {
+  async function invokeAnnotate(
+    video: VideoEntry,
+    options: {
+      preview?: boolean;
+      segment?: string;
+      framesDir?: string;
+      previewDir?: string;
+      initBboxes?: number[][];
+    } = {},
+  ) {
     const videoId = getVideoId(video);
     if (!videoId) {
       annotateError = "Cannot determine a video id for this entry";
@@ -238,6 +271,7 @@
     }
     if (annotateJobs.get(videoId)?.status === "running") return;
 
+    const manualTrack = (options.initBboxes?.length ?? 0) > 0;
     const classes = annotateClasses
       .split(/[\s,]+/)
       .map((name) => name.trim())
@@ -253,7 +287,28 @@
       await saveCollection();
       if (hasUnsaved) return;
     }
-    setAnnotateJob(videoId, "running", `Starting auto-annotation for ${videoId}...`);
+
+    const preview = options.preview ?? false;
+    if (preview && options.segment && options.framesDir && options.previewDir) {
+      previewTarget = {
+        videoId,
+        segmentFolder: options.segment,
+        framesDir: options.framesDir,
+        previewDir: options.previewDir,
+      };
+    } else {
+      previewTarget = null;
+    }
+
+    setAnnotateJob(
+      videoId,
+      "running",
+      manualTrack
+        ? `Tracking ${options.initBboxes!.length} box(es) in ${options.segment ?? "segment"}...`
+        : preview
+          ? `Previewing ${options.segment ?? "segment"} for ${videoId}...`
+          : `Starting auto-annotation for ${videoId}...`,
+    );
     try {
       await invoke("start_video_annotate", {
         dataJson: dataPath,
@@ -266,10 +321,168 @@
         writeAll: annotateWriteAll,
         moondreamModel: annotateModel,
         datasetKitDir: datasetKitDir || null,
+        useTracking: manualTrack ? true : annotateUseTracking,
+        scoreThreshold: annotateScoreThreshold,
+        trackDevice: annotateTrackDevice,
+        preview,
+        segment: options.segment ?? null,
+        labelsSubdir: preview ? PREVIEW_SUBDIR : "labels",
+        initBboxes: options.initBboxes ?? null,
       });
       if (!resolvedKitDir) void resolveKitDir();
     } catch (err) {
+      previewTarget = null;
       setAnnotateJob(videoId, "error", `Error: ${String(err)}`);
+    }
+  }
+
+  async function startAutoAnnotate(video: VideoEntry) {
+    await invokeAnnotate(video, {});
+  }
+
+  async function previewSegment(video: VideoEntry, seg: string[]) {
+    const framesDir = segmentFramesDir(video, seg);
+    const previewDir = segmentPreviewDir(video, seg);
+    if (!framesDir || !previewDir) {
+      annotateError = "Cannot resolve segment directories";
+      return;
+    }
+    await invokeAnnotate(video, {
+      preview: true,
+      segment: segmentToFolderName(seg),
+      framesDir,
+      previewDir,
+    });
+  }
+
+  async function openTrackDialog(video: VideoEntry, seg: string[]) {
+    const framesDir = segmentFramesDir(video, seg);
+    const previewDir = segmentPreviewDir(video, seg);
+    if (!framesDir || !previewDir) {
+      annotateError = "Cannot resolve segment directories";
+      return;
+    }
+    annotateError = "";
+    try {
+      const lastFrame = await invoke<string | null>("get_last_frame_path", {
+        imagesDir: framesDir,
+      });
+      if (!lastFrame) {
+        annotateError = "No frames found for this segment";
+        return;
+      }
+      trackDialog = {
+        video,
+        seg,
+        imageSrc: convertFileSrc(lastFrame),
+        framesDir,
+        previewDir,
+      };
+    } catch (err) {
+      annotateError = String(err);
+    }
+  }
+
+  async function confirmTrack(boxes: number[][]) {
+    const dialog = trackDialog;
+    trackDialog = null;
+    if (!dialog || boxes.length === 0) return;
+    await invokeAnnotate(dialog.video, {
+      preview: true,
+      segment: segmentToFolderName(dialog.seg),
+      framesDir: dialog.framesDir,
+      previewDir: dialog.previewDir,
+      initBboxes: boxes,
+    });
+  }
+
+  function openPreviewTab(target: {
+    videoId: string;
+    segmentFolder: string;
+    framesDir: string;
+    previewDir: string;
+  }) {
+    if (!openDatasetInNewTab) return;
+    openDatasetInNewTab(
+      { dirs: [{ imagesDir: target.framesDir, labelsDir: target.previewDir }] },
+      `${target.videoId}-${target.segmentFolder} preview`,
+    );
+  }
+
+  async function refreshSegmentPreviews() {
+    if (!collection || selectedVideoIndex < 0) {
+      segmentPreviewReady = new Map();
+      return;
+    }
+    const video = collection.videos[selectedVideoIndex];
+    if (!video?.keep_segments || video.keep_segments.length === 0) {
+      segmentPreviewReady = new Map();
+      return;
+    }
+    const vid = getVideoId(video) ?? "";
+    const map = new Map<string, boolean>();
+    await Promise.all(
+      video.keep_segments.map(async (seg) => {
+        const key = segmentToFolderName(seg);
+        const dir = segmentPreviewDir(video, seg);
+        if (!dir) {
+          map.set(key, false);
+          return;
+        }
+        try {
+          const available = await exists(dir);
+          map.set(key, available && !segmentPreviewSaved.has(`${vid}::${key}`));
+        } catch {
+          map.set(key, false);
+        }
+      }),
+    );
+    segmentPreviewReady = map;
+  }
+
+  async function saveSegmentPreview(video: VideoEntry, seg: string[]) {
+    const segDir = segmentDir(video, seg);
+    const vid = getVideoId(video);
+    if (!segDir || !vid) return;
+    try {
+      await invoke("commit_segment_preview", {
+        segmentDir: segDir,
+        previewSubdir: PREVIEW_SUBDIR,
+        labelsSubdir: "labels",
+      });
+      segmentPreviewSaved = new Set([
+        ...segmentPreviewSaved,
+        `${vid}::${segmentToFolderName(seg)}`,
+      ]);
+      const next = new Map(segmentPreviewReady);
+      next.set(segmentToFolderName(seg), false);
+      segmentPreviewReady = next;
+      void refreshAnnotateStatuses();
+      datasetRefresh += 1;
+    } catch (err) {
+      annotateError = String(err);
+    }
+  }
+
+  async function discardSegmentPreview(video: VideoEntry, seg: string[]) {
+    const segDir = segmentDir(video, seg);
+    const vid = getVideoId(video);
+    if (!segDir || !vid) return;
+    try {
+      await invoke("discard_segment_preview", {
+        segmentDir: segDir,
+        previewSubdir: PREVIEW_SUBDIR,
+      });
+      segmentPreviewSaved = new Set(
+        [...segmentPreviewSaved].filter(
+          (key) => key !== `${vid}::${segmentToFolderName(seg)}`,
+        ),
+      );
+      const next = new Map(segmentPreviewReady);
+      next.set(segmentToFolderName(seg), false);
+      segmentPreviewReady = next;
+    } catch (err) {
+      annotateError = String(err);
     }
   }
 
@@ -330,9 +543,15 @@
       "video-annotate-done",
       (event) => {
         const { videoId, success, code } = event.payload;
+        const target = previewTarget;
+        previewTarget = null;
         if (success) {
           setAnnotateJob(videoId, "done");
           void refreshAnnotateStatuses();
+          if (target && target.videoId === videoId) {
+            openPreviewTab(target);
+            void refreshSegmentPreviews();
+          }
         } else {
           setAnnotateJob(videoId, "error", `Exited with code ${code ?? "unknown"}`);
         }
@@ -341,7 +560,13 @@
     const unlistenError = listen<{ videoId: string; error: string }>(
       "video-annotate-error",
       (event) => {
-        setAnnotateJob(event.payload.videoId, "error", `Error: ${event.payload.error}`);
+        previewTarget = null;
+        const error = event.payload.error;
+        if (error === "cancelled") {
+          setAnnotateJob(event.payload.videoId, "cancelled", "Cancelled");
+        } else {
+          setAnnotateJob(event.payload.videoId, "error", `Error: ${error}`);
+        }
       },
     );
     return () => {
@@ -388,6 +613,7 @@
 
   function openVideoDetails(index: number): void {
     selectedVideoIndex = index;
+    detailsPane?.scrollTo({ top: 0 });
   }
 
   function toggleVideoSelection(index: number, visibleIndex: number, event: MouseEvent) {
@@ -447,6 +673,17 @@
     const vid = getVideoId(entry);
     if (!vid) return null;
     return `${resolvedVideosDir}\\${vid}\\${segmentToFolderName(seg)}\\labels`;
+  }
+
+  function segmentDir(entry: VideoEntry, seg: string[]): string | null {
+    const vid = getVideoId(entry);
+    if (!vid) return null;
+    return `${resolvedVideosDir}\\${vid}\\${segmentToFolderName(seg)}`;
+  }
+
+  function segmentPreviewDir(entry: VideoEntry, seg: string[]): string | null {
+    const dir = segmentDir(entry, seg);
+    return dir ? `${dir}\\${PREVIEW_SUBDIR}` : null;
   }
 
   function getVideoId(entry: VideoEntry): string | null {
@@ -751,6 +988,14 @@
     void refreshAnnotateStatuses();
   });
 
+  $effect(() => {
+    void collection;
+    void selectedVideoIndex;
+    void datasetRefresh;
+    void resolvedVideosDir;
+    void refreshSegmentPreviews();
+  });
+
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   $effect(() => {
@@ -905,7 +1150,7 @@
   {/if}
 
   {#if collection}
-    <div class="overflow-hidden grid grid-cols-[360px_1fr] divide-x divide-zinc-700">
+    <div class="overflow-hidden grid grid-cols-[320px_minmax(0,1fr)] divide-x divide-zinc-700">
       <div class="overflow-y-auto">
         {#each visibleVideos as { video, index: i }, visibleIndex (i)}
           {@const rowSplitJob = getSplitJob(getVideoId(video))}
@@ -964,7 +1209,7 @@
                 </div>
               {/if}
               <div class="min-w-0">
-                <p class="truncate text-xs mb-1.5 {resolvedFilePath(video) ? 'text-zinc-300' : 'text-zinc-400'}">
+                <p class="truncate text-xs mb-1 {resolvedFilePath(video) ? 'text-zinc-300' : 'text-zinc-400'}">
                   {video.url || video.file || "(no url)"}
                 </p>
                 <div class="flex flex-wrap items-center gap-1 mb-1">
@@ -993,7 +1238,7 @@
                 {#if video.tags?.length}
                   <div class="flex flex-wrap items-center gap-1">
                     {#each video.tags as tag}
-                      <span class="text-[11px] leading-[1.6] text-[#a8adb8] whitespace-nowrap">#{tag}</span>
+                      <span class="text-[11px] leading-4 text-[#a8adb8] whitespace-nowrap">#{tag}</span>
                     {/each}
                   </div>
                 {/if}
@@ -1003,7 +1248,7 @@
         {/each}
       </div>
 
-      <div class="overflow-y-auto p-4">
+      <div bind:this={detailsPane} class="min-w-0 overflow-y-auto p-4">
         {#if selectedVideoIndex >= 0 && selectedVideoIndex < collection.videos.length}
           {@const video = collection.videos[selectedVideoIndex]}
           {@const selectedVideoId = getVideoId(video)}
@@ -1039,79 +1284,14 @@
               />
             </div>
 
-            <div class="flex items-start gap-4">
-              <div class="min-w-0 flex-1 space-y-3">
-                <label class="block space-y-1">
-                  <span class="text-sm text-zinc-400">URL</span>
-                  <div class="flex gap-1">
-                    <input
-                      type="text"
-                      class="min-w-0 flex-1 px-3 py-2 border border-zinc-700 bg-zinc-800"
-                      value={video.url ?? ""}
-                      oninput={(e) => { video.url = (e.target as HTMLInputElement).value || undefined; hasUnsaved = true; }}
-                      placeholder="https://www.youtube.com/watch?v=... , https://x.com/i/status/... or https://t.me/channel/123"
-                    />
-                    {#if video.url}
-                      <button
-                        class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
-                        onclick={() => openVideoUrl(video.url!)}
-                      >
-                        Open
-                      </button>
-                    {/if}
-                  </div>
-                </label>
-
-                <label class="block space-y-1">
-                  <span class="text-sm text-zinc-400">Local video file</span>
-                  <div class="flex gap-1">
-                    <input
-                      type="text"
-                      class="min-w-0 flex-1 px-3 py-2 border border-zinc-700 bg-zinc-800"
-                      value={video.file_path ?? ""}
-                      oninput={(e) => { video.file_path = (e.target as HTMLInputElement).value || undefined; hasUnsaved = true; }}
-                      placeholder={resolvedFilePath(video) ?? "D:\\Videos\\video.mp4"}
-                    />
-                    {#if resolvedFilePath(video)}
-                      <button class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700" onclick={() => navigator.clipboard.writeText(resolvedFilePath(video)!)}>Copy path</button>
-                      <button class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700" onclick={() => openFilePathInViewer(resolvedFilePath(video)!)}>Open</button>
-                    {/if}
-                  </div>
-                  {#if !video.file_path && resolvedFilePath(video)}
-                    <span class="text-xs text-zinc-500">Auto-detected from videos directory</span>
-                  {/if}
-                </label>
-                <div class="flex items-center gap-2 flex-wrap">
-                  {#each video.tags as tag, ti}
-                    <span class="bg-zinc-700 px-2 py-0.5 text-sm flex items-center gap-1">
-                      {tag}
-                      <button class="text-zinc-400 hover:text-red-400" onclick={() => removeTag(selectedVideoIndex, ti)}>x</button>
-                    </span>
-                  {/each}
-                  <div class="relative inline-block">
-                    <form class="inline-flex" onsubmit={(e) => { e.preventDefault(); addTagToSelected(); tagSuggestionsOpen = false; }}>
-                      <input type="text" class="w-24 px-2 py-0.5 text-sm border border-zinc-700 bg-zinc-800" bind:value={tagInput} placeholder="+ tag" onfocus={() => tagSuggestionsOpen = true} oninput={() => tagSuggestionsOpen = true} onblur={() => setTimeout(() => tagSuggestionsOpen = false, 100)} />
-                    </form>
-                    {#if tagSuggestionsOpen && tagSuggestions.length > 0}
-                      <div class="absolute left-0 top-full z-20 min-w-full border border-zinc-600 bg-zinc-800 shadow-lg">
-                        {#each tagSuggestions as tag}
-                          <button type="button" class="block w-full whitespace-nowrap px-2 py-1 text-left text-sm hover:bg-zinc-700" onclick={() => selectTagSuggestion(tag)}>{tag}</button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            </div>
-
             {#if segmentStatus(video, selectedVideoIndex) === "uptodate"}
               <div class="text-sm text-green-400">Segments up to date</div>
             {:else if segmentStatus(video, selectedVideoIndex) === "stale"}
               <div class="text-sm text-yellow-400">Segments changed since last processing</div>
             {/if}
 
-            <div class="border-t border-zinc-700 pt-3 space-y-3">
-              <div class="flex flex-wrap items-center gap-2">
+            <div class="ui-section space-y-2">
+              <div class="ui-actions">
             {#if openDatasetInNewTab}
               <button
                 class="px-3 py-1.5 text-sm bg-cyan-600 hover:bg-cyan-700 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1142,25 +1322,13 @@
                   class="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600"
                   onclick={() => annotateSettingsOpen = !annotateSettingsOpen}
                 >
-                  {annotateSettingsOpen ? "Hide settings" : "Settings"}
+                  {annotateSettingsOpen ? "Hide annotate settings" : "Annotate settings"}
                 </button>
-                {#if selectedAnnotateJob?.status === "running"}
-                  <button
-                    class="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600"
-                    onclick={() => cancelAutoAnnotate(video)}
-                  >
-                    Cancel
-                  </button>
-                {/if}
-                {#if selectedAnnotateIndicator}
-                  <span class="{statusPillBase} {statusPillClass[selectedAnnotateIndicator.variant]}"><span aria-hidden="true">{statusIcon[selectedAnnotateIndicator.variant]}</span>{selectedAnnotateIndicator.label}</span>
-                {/if}
-                {#if anyAnnotateRunning && selectedAnnotateJob?.status !== "running"}
-                  <span class="text-xs text-zinc-500">Another auto-annotation is running…</span>
-                {/if}
               </div>
               <div class="space-y-2">
-              <div class="flex flex-wrap items-center gap-2">
+              <div class="text-xs font-semibold text-zinc-300">Split segments &amp; frames</div>
+              {#if selectedSplitJob}
+              <div class="ui-actions">
                 {#if selectedSplitJob?.status === "running"}
                   <button
                     class="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600"
@@ -1175,6 +1343,7 @@
                   <span class="text-xs text-red-400">failed</span>
                 {/if}
               </div>
+              {/if}
               {#if resolvedKitDir}
                 <div class="text-[10px] text-zinc-600">dataset-kit: {resolvedKitDir}</div>
               {/if}
@@ -1186,20 +1355,35 @@
               {/if}
             </div>
 
-            <div class="space-y-2">
-
-              {#if selectedAnnotateDisk}
-                <div class="text-[10px] text-zinc-500">
-                  Auto-annotation:
-                  {#if selectedAnnotateDisk.status === "completed"}
-                    <span class="text-green-400">completed</span>
-                  {:else if selectedAnnotateDisk.status === "partial"}
-                    <span class="text-yellow-400">paused / partial ({selectedAnnotateDisk.processedFrames}/{selectedAnnotateDisk.totalFrames} frames)</span>
-                  {:else}
-                    <span class="text-zinc-400">not started</span>
-                  {/if}
-                </div>
-              {/if}
+            <div class="space-y-2 border-t border-zinc-700 pt-3">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-semibold text-zinc-300">Auto-annotation</span>
+                {#if selectedAnnotateJob?.status === "running"}
+                  <button
+                    class="px-2 py-0.5 text-xs bg-zinc-700 hover:bg-zinc-600"
+                    onclick={() => cancelAutoAnnotate(video)}
+                  >
+                    Cancel
+                  </button>
+                {/if}
+                {#if selectedAnnotateIndicator}
+                  <span class="{statusPillBase} {statusPillClass[selectedAnnotateIndicator.variant]}"><span aria-hidden="true">{statusIcon[selectedAnnotateIndicator.variant]}</span>{selectedAnnotateIndicator.label}</span>
+                {/if}
+                {#if selectedAnnotateDisk}
+                  <span class="text-[10px] text-zinc-500">
+                    {#if selectedAnnotateDisk.status === "completed"}
+                      <span class="text-green-400">completed</span>
+                    {:else if selectedAnnotateDisk.status === "partial"}
+                      <span class="text-yellow-400">partial ({selectedAnnotateDisk.processedFrames}/{selectedAnnotateDisk.totalFrames} frames)</span>
+                    {:else}
+                      <span class="text-zinc-400">not started</span>
+                    {/if}
+                  </span>
+                {/if}
+                {#if anyAnnotateRunning && selectedAnnotateJob?.status !== "running"}
+                  <span class="text-xs text-zinc-500">Another auto-annotation is running…</span>
+                {/if}
+              </div>
               {#if annotateSettingsOpen}
                 <div class="flex flex-wrap items-center gap-2 text-xs">
                   <label class="flex items-center gap-1">
@@ -1243,6 +1427,31 @@
                     <input type="checkbox" bind:checked={annotateWriteAll} />
                     Write empty labels
                   </label>
+                  <label class="flex items-center gap-1">
+                    <input type="checkbox" bind:checked={annotateUseTracking} />
+                    Use LightFC tracking
+                  </label>
+                  {#if annotateUseTracking}
+                    <label class="flex items-center gap-1">
+                      Score threshold
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        class="w-20 px-2 py-1 border border-zinc-700 bg-zinc-800"
+                        bind:value={annotateScoreThreshold}
+                      />
+                    </label>
+                    <label class="flex items-center gap-1">
+                      Track device
+                      <input
+                        type="text"
+                        class="w-24 px-2 py-1 border border-zinc-700 bg-zinc-800"
+                        bind:value={annotateTrackDevice}
+                        placeholder="auto"
+                      />
+                    </label>
+                  {/if}
                 </div>
               {/if}
               {#if annotateError}
@@ -1255,6 +1464,71 @@
 
             </div>
 
+            <div class="ui-section">
+              <div class="min-w-0 space-y-4">
+                <label class="block space-y-1">
+                  <span class="text-sm text-zinc-400">URL</span>
+                  <div class="ui-controls flex-nowrap">
+                    <input
+                      type="text"
+                      class="ui-field min-w-0 flex-1 border border-zinc-700 bg-zinc-800"
+                      value={video.url ?? ""}
+                      oninput={(e) => { video.url = (e.target as HTMLInputElement).value || undefined; hasUnsaved = true; }}
+                      placeholder="https://www.youtube.com/watch?v=... , https://x.com/i/status/... or https://t.me/channel/123"
+                    />
+                    {#if video.url}
+                      <button
+                        class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
+                        onclick={() => openVideoUrl(video.url!)}
+                      >
+                        Open
+                      </button>
+                    {/if}
+                  </div>
+                </label>
+
+                <label class="block space-y-1">
+                  <span class="text-sm text-zinc-400">Local video file</span>
+                  <div class="ui-controls flex-nowrap">
+                    <input
+                      type="text"
+                      class="ui-field min-w-0 flex-1 border border-zinc-700 bg-zinc-800"
+                      value={video.file_path ?? ""}
+                      oninput={(e) => { video.file_path = (e.target as HTMLInputElement).value || undefined; hasUnsaved = true; }}
+                      placeholder={resolvedFilePath(video) ?? "D:\\Videos\\video.mp4"}
+                    />
+                    {#if resolvedFilePath(video)}
+                      <button class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700" onclick={() => navigator.clipboard.writeText(resolvedFilePath(video)!)}>Copy path</button>
+                      <button class="px-3 border border-zinc-700 bg-zinc-800 hover:bg-zinc-700" onclick={() => openFilePathInViewer(resolvedFilePath(video)!)}>Open</button>
+                    {/if}
+                  </div>
+                  {#if !video.file_path && resolvedFilePath(video)}
+                    <span class="text-xs text-zinc-500">Auto-detected from videos directory</span>
+                  {/if}
+                </label>
+                <div class="flex items-center gap-2 flex-wrap">
+                  {#each video.tags as tag, ti}
+                    <span class="bg-zinc-700 px-2 py-0.5 text-sm flex items-center gap-1">
+                      {tag}
+                      <button class="text-zinc-400 hover:text-red-400" onclick={() => removeTag(selectedVideoIndex, ti)}>x</button>
+                    </span>
+                  {/each}
+                  <div class="relative inline-block">
+                    <form class="inline-flex" onsubmit={(e) => { e.preventDefault(); addTagToSelected(); tagSuggestionsOpen = false; }}>
+                      <input type="text" class="w-24 px-2 py-0.5 text-sm border border-zinc-700 bg-zinc-800" bind:value={tagInput} placeholder="+ tag" onfocus={() => tagSuggestionsOpen = true} oninput={() => tagSuggestionsOpen = true} onblur={() => setTimeout(() => tagSuggestionsOpen = false, 100)} />
+                    </form>
+                    {#if tagSuggestionsOpen && tagSuggestions.length > 0}
+                      <div class="absolute left-0 top-full z-20 min-w-full border border-zinc-600 bg-zinc-800 shadow-lg">
+                        {#each tagSuggestions as tag}
+                          <button type="button" class="block w-full whitespace-nowrap px-2 py-1 text-left text-sm hover:bg-zinc-700" onclick={() => selectTagSuggestion(tag)}>{tag}</button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {#if segmentStatus(video, selectedVideoIndex) === "uptodate" && video.keep_segments && video.keep_segments.length > 0}
               <div class="space-y-2">
                 <div class="text-xs text-zinc-500">Segment previews ({video.keep_segments.length}) — click to play/pause</div>
@@ -1264,6 +1538,8 @@
                     {@const segPath = segmentVideoPath(video, seg)}
                     {@const thumbPath = segmentFramePath(video, seg)}
                     {@const palette = numberToAccentPalette(si)}
+                    {@const segFolder = segmentToFolderName(seg)}
+                    {@const previewReady = segmentPreviewReady.get(segFolder) ?? false}
                     <div
                       class="relative overflow-hidden group transition-colors"
                       role="button"
@@ -1337,13 +1613,63 @@
                         <span>{seg[0]}–{seg[1]}</span>
                         <span>{formatTimecode(parseTimecode(seg[1]) - parseTimecode(seg[0]))}</span>
                       </div>
+                      <div class="flex flex-wrap items-center gap-1 px-1 py-0.5 text-[10px]">
+                        <button
+                          type="button"
+                          class="px-1.5 py-0.5 bg-purple-700 hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                          disabled={anyAnnotateRunning}
+                          title="Auto-annotate this segment and open the result for review before saving"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            void previewSegment(video, seg);
+                          }}
+                        >
+                          {previewReady ? "re-annotate" : "annotate"}
+                        </button>
+                        <button
+                          type="button"
+                          class="px-1.5 py-0.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                          disabled={anyAnnotateRunning}
+                          title="Mark a box on the last frame and have LightFC track it across the segment (no Moondream)"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            void openTrackDialog(video, seg);
+                          }}
+                        >
+                          track
+                        </button>
+                        {#if previewReady}
+                          <button
+                            type="button"
+                            class="px-1.5 py-0.5 bg-green-700 hover:bg-green-600"
+                            title="Copy the previewed labels into the segment's labels directory"
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              void saveSegmentPreview(video, seg);
+                            }}
+                          >
+                            save
+                          </button>
+                          <button
+                            type="button"
+                            class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600"
+                            title="Delete the previewed labels"
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              void discardSegmentPreview(video, seg);
+                            }}
+                          >
+                            discard
+                          </button>
+                        {/if}
+                      </div>
                     </div>
                   {/each}
                 </div>
               </div>
             {/if}
 
-            <div class="flex items-center gap-2">
+            <div class="ui-actions">
               {#if video.irrelevant}
                 <button
                   class="bg-zinc-700 hover:bg-zinc-600 px-3 py-1.5 text-sm"
@@ -1372,5 +1698,13 @@
     <div class="h-full grid place-content-center text-zinc-600">
       Loading...
     </div>
+  {/if}
+
+  {#if trackDialog}
+    <BboxMarkDialog
+      imageSrc={trackDialog.imageSrc}
+      onConfirm={confirmTrack}
+      onCancel={() => (trackDialog = null)}
+    />
   {/if}
 </div>

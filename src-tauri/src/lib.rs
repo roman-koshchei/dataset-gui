@@ -3,11 +3,11 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, State};
 
@@ -118,19 +118,23 @@ struct WatchState {
     watchers: HashMap<String, WatcherEntry>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum JobKind {
-    Split,
-    Annotate,
-}
-
 struct ProcessJob {
     child: Arc<Mutex<Child>>,
-    kind: JobKind,
 }
 
 struct JobRegistry {
     jobs: HashMap<String, ProcessJob>,
+}
+
+struct AnnotateServer {
+    child: Arc<Mutex<Child>>,
+    stdin: Arc<Mutex<ChildStdin>>,
+    kit_dir: String,
+    running_job: Option<String>,
+}
+
+struct AnnotateServerState {
+    server: Option<AnnotateServer>,
 }
 
 fn parse_yolo_line(line: &str) -> Result<DatasetLabel, String> {
@@ -706,6 +710,18 @@ async fn get_sorted_image_names(images_dir: String) -> Result<Vec<String>, Strin
 }
 
 #[tauri::command]
+async fn get_last_frame_path(images_dir: String) -> Result<Option<String>, String> {
+    let dir = Path::new(&images_dir);
+    if !dir.exists() {
+        return Err(format!("Directory does not exist: {}", images_dir));
+    }
+    let entries = get_sorted_image_files(dir)?;
+    Ok(entries
+        .last()
+        .map(|entry| entry.path().to_string_lossy().to_string()))
+}
+
+#[tauri::command]
 fn resave_labels(
     labels_dir: String,
     name: String,
@@ -1000,7 +1016,6 @@ fn run_background_process(
     app: tauri::AppHandle,
     registry: &Mutex<JobRegistry>,
     key: String,
-    kind: JobKind,
     event_base: &'static str,
     mut command: Command,
 ) -> Result<(), String> {
@@ -1037,7 +1052,6 @@ fn run_background_process(
             key.clone(),
             ProcessJob {
                 child: Arc::clone(&child),
-                kind,
             },
         );
     }
@@ -1186,7 +1200,6 @@ fn start_video_split(
         app,
         state.inner(),
         video_id,
-        JobKind::Split,
         "video-split",
         command,
     )
@@ -1197,11 +1210,184 @@ fn cancel_video_split(state: State<'_, Mutex<JobRegistry>>, video_id: String) ->
     cancel_job(state.inner(), &video_id)
 }
 
+fn current_annotate_job(app: &tauri::AppHandle) -> Option<String> {
+    let state = app.try_state::<Mutex<AnnotateServerState>>()?;
+    let guard = state.lock().ok()?;
+    guard
+        .server
+        .as_ref()
+        .and_then(|server| server.running_job.clone())
+}
+
+fn finish_annotate_job(app: &tauri::AppHandle, error: Option<String>) {
+    let video_id = {
+        let Some(state) = app.try_state::<Mutex<AnnotateServerState>>() else {
+            return;
+        };
+        let Ok(mut guard) = state.lock() else {
+            return;
+        };
+        guard
+            .server
+            .as_mut()
+            .and_then(|server| server.running_job.take())
+    };
+    let Some(video_id) = video_id else {
+        return;
+    };
+    match error {
+        Some(message) => {
+            let _ = app.emit(
+                "video-annotate-error",
+                serde_json::json!({ "videoId": video_id, "error": message }),
+            );
+        }
+        None => {
+            let _ = app.emit(
+                "video-annotate-done",
+                serde_json::json!({ "videoId": video_id, "success": true, "code": 0 }),
+            );
+        }
+    }
+}
+
+fn spawn_annotate_stdout_reader<R: std::io::Read + Send + 'static>(
+    app: tauri::AppHandle,
+    reader: R,
+) {
+    std::thread::spawn(move || {
+        let buffered = BufReader::new(reader);
+        for line in buffered.lines() {
+            let Ok(line) = line else { break };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+            if value.get("type").and_then(|kind| kind.as_str()) != Some("result") {
+                continue;
+            }
+            let ok = value.get("ok").and_then(|flag| flag.as_bool()).unwrap_or(false);
+            if ok {
+                finish_annotate_job(&app, None);
+            } else {
+                let message = value
+                    .get("error")
+                    .and_then(|err| err.as_str())
+                    .unwrap_or("annotation failed")
+                    .to_string();
+                finish_annotate_job(&app, Some(message));
+            }
+        }
+        finish_annotate_job(&app, Some("annotation server stopped".to_string()));
+        if let Some(state) = app.try_state::<Mutex<AnnotateServerState>>() {
+            if let Ok(mut guard) = state.lock() {
+                guard.server = None;
+            }
+        }
+    });
+}
+
+fn spawn_annotate_stderr_reader<R: std::io::Read + Send + 'static>(
+    app: tauri::AppHandle,
+    reader: R,
+) {
+    std::thread::spawn(move || {
+        let buffered = BufReader::new(reader);
+        for line in buffered.lines() {
+            let Ok(line) = line else { break };
+            if let Some(video_id) = current_annotate_job(&app) {
+                let _ = app.emit(
+                    "video-annotate-progress",
+                    serde_json::json!({
+                        "videoId": video_id,
+                        "stream": "stderr",
+                        "line": line,
+                    }),
+                );
+            }
+        }
+    });
+}
+
+fn annotate_server_alive(server: &AnnotateServer) -> bool {
+    server
+        .child
+        .lock()
+        .map(|mut child| matches!(child.try_wait(), Ok(None)))
+        .unwrap_or(false)
+}
+
+fn ensure_annotate_server(
+    app: &tauri::AppHandle,
+    state: &mut AnnotateServerState,
+    kit_dir: &Path,
+) -> Result<(), String> {
+    let kit_dir_str = kit_dir.to_string_lossy().to_string();
+    let reusable = state
+        .server
+        .as_ref()
+        .map(|server| server.kit_dir == kit_dir_str && annotate_server_alive(server))
+        .unwrap_or(false);
+    if reusable {
+        return Ok(());
+    }
+
+    if let Some(previous) = state.server.take() {
+        if let Ok(mut child) = previous.child.lock() {
+            let _ = child.kill();
+        }
+    }
+
+    let mut command = python_invocation(kit_dir);
+    command
+        .arg("-u")
+        .arg("annotate_server.py")
+        .current_dir(kit_dir);
+
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start annotation server: {}", e))?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to capture annotation server stdin".to_string())?;
+
+    if let Some(out) = stdout {
+        spawn_annotate_stdout_reader(app.clone(), out);
+    }
+    if let Some(err) = stderr {
+        spawn_annotate_stderr_reader(app.clone(), err);
+    }
+
+    state.server = Some(AnnotateServer {
+        child: Arc::new(Mutex::new(child)),
+        stdin: Arc::new(Mutex::new(stdin)),
+        kit_dir: kit_dir_str,
+        running_job: None,
+    });
+    Ok(())
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn start_video_annotate(
     app: tauri::AppHandle,
-    state: State<'_, Mutex<JobRegistry>>,
+    state: State<'_, Mutex<AnnotateServerState>>,
     data_json: String,
     project_dir: String,
     videos_dir: Option<String>,
@@ -1212,6 +1398,14 @@ fn start_video_annotate(
     write_all: Option<bool>,
     moondream_model: Option<String>,
     dataset_kit_dir: Option<String>,
+    use_tracking: Option<bool>,
+    score_threshold: Option<f64>,
+    track_device: Option<String>,
+    lightfc_onnx_dir: Option<String>,
+    preview: Option<bool>,
+    segment: Option<String>,
+    labels_subdir: Option<String>,
+    init_bboxes: Option<Vec<Vec<f64>>>,
 ) -> Result<(), String> {
     let video_id = video_id.trim().to_string();
     if video_id.is_empty() {
@@ -1227,72 +1421,216 @@ fn start_video_annotate(
         return Err("At least one class name is required".to_string());
     }
 
-    {
-        let registry = state.lock().map_err(|e| e.to_string())?;
-        if registry
-            .jobs
-            .values()
-            .any(|job| job.kind == JobKind::Annotate)
-        {
-            return Err("Another auto-annotation is already running".to_string());
-        }
-    }
-
     let kit_dir = resolve_dataset_kit_dir(dataset_kit_dir.as_deref())?;
     if !Path::new(&data_json).is_file() {
         return Err(format!("data.json not found: {}", data_json));
     }
 
-    let mut command = python_invocation(&kit_dir);
-    command
-        .arg("-u")
-        .arg("main.py")
-        .arg("auto-annotate-video-segments")
-        .arg("--data-json")
-        .arg(&data_json)
-        .arg("--project-dir")
-        .arg(&project_dir)
-        .arg("--video-id")
-        .arg(&video_id)
-        .arg("--class-id")
-        .arg(class_id.unwrap_or(0).to_string())
-        .arg("--every-n")
-        .arg(every_n.unwrap_or(1).max(1).to_string())
-        .arg("--moondream-model")
-        .arg(moondream_model.as_deref().unwrap_or("moondream2"));
+    let trimmed = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
+    };
 
-    if let Some(videos_dir) = videos_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|dir| !dir.is_empty())
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    if guard
+        .server
+        .as_ref()
+        .map(|server| server.running_job.is_some())
+        .unwrap_or(false)
     {
-        command.arg("--videos-dir").arg(videos_dir);
+        return Err("Another auto-annotation is already running".to_string());
     }
-    if write_all.unwrap_or(false) {
-        command.arg("--write-all");
-    }
-    command.arg("--classes");
-    for class_name in &classes {
-        command.arg(class_name);
-    }
-    command.current_dir(&kit_dir);
 
-    run_background_process(
-        app,
-        state.inner(),
-        video_id,
-        JobKind::Annotate,
-        "video-annotate",
-        command,
-    )
+    ensure_annotate_server(&app, &mut guard, &kit_dir)?;
+
+    let request = serde_json::json!({
+        "id": video_id,
+        "action": "annotate",
+        "data_json": data_json,
+        "project_dir": project_dir,
+        "videos_dir": trimmed(&videos_dir),
+        "video_ids": [video_id.clone()],
+        "classes": classes,
+        "class_id": class_id.unwrap_or(0),
+        "every_n": every_n.unwrap_or(1).max(1),
+        "write_all": write_all.unwrap_or(false),
+        "moondream_model": trimmed(&moondream_model).unwrap_or_else(|| "moondream2".to_string()),
+        "use_tracking": use_tracking.unwrap_or(false),
+        "score_threshold": score_threshold.unwrap_or(0.0).max(0.0),
+        "track_device": trimmed(&track_device),
+        "lightfc_onnx_dir": trimmed(&lightfc_onnx_dir),
+        "preview": preview.unwrap_or(false),
+        "segment": trimmed(&segment),
+        "labels_subdir": trimmed(&labels_subdir).unwrap_or_else(|| "labels".to_string()),
+        "init_bboxes": init_bboxes,
+        "overwrite": false,
+    });
+
+    let server = guard
+        .server
+        .as_mut()
+        .ok_or_else(|| "Annotation server unavailable".to_string())?;
+    server.running_job = Some(video_id.clone());
+
+    let serialized = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+    let write_result = {
+        let mut stdin = server.stdin.lock().map_err(|e| e.to_string())?;
+        writeln!(stdin, "{}", serialized).and_then(|_| stdin.flush())
+    };
+    if let Err(err) = write_result {
+        server.running_job = None;
+        return Err(format!("Failed to send annotation request: {}", err));
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn cancel_video_annotate(
-    state: State<'_, Mutex<JobRegistry>>,
+    state: State<'_, Mutex<AnnotateServerState>>,
     video_id: String,
 ) -> Result<(), String> {
-    cancel_job(state.inner(), &video_id)
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    let Some(server) = guard.server.as_ref() else {
+        return Ok(());
+    };
+    if server.running_job.as_deref() != Some(video_id.as_str()) {
+        return Ok(());
+    }
+
+    let payload = serde_json::json!({ "action": "cancel", "id": video_id });
+    let serialized = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    let mut stdin = server.stdin.lock().map_err(|e| e.to_string())?;
+    writeln!(stdin, "{}", serialized)
+        .and_then(|_| stdin.flush())
+        .map_err(|e| format!("Failed to send cancel request: {}", e))?;
+    Ok(())
+}
+
+const DEFAULT_PREVIEW_SUBDIR: &str = ".preview_labels";
+
+fn read_processed_files(segment_dir: &Path) -> Vec<String> {
+    let Ok(content) = fs::read_to_string(segment_dir.join("processed.json")) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return Vec::new();
+    };
+    value
+        .get("files")
+        .and_then(|files| files.as_array())
+        .map(|files| {
+            files
+                .iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn commit_segment_preview(
+    segment_dir: String,
+    preview_subdir: Option<String>,
+    labels_subdir: Option<String>,
+) -> Result<usize, String> {
+    let segment_path = Path::new(&segment_dir);
+    let preview_subdir = preview_subdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_PREVIEW_SUBDIR);
+    let labels_subdir = labels_subdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("labels");
+
+    let preview_dir = segment_path.join(preview_subdir);
+    if !preview_dir.is_dir() {
+        return Err(format!(
+            "Preview directory not found: {}",
+            preview_dir.display()
+        ));
+    }
+
+    let labels_dir = segment_path.join(labels_subdir);
+    fs::create_dir_all(&labels_dir)
+        .map_err(|e| format!("Failed to create labels directory: {}", e))?;
+
+    let frames_dir = segment_path.join("frames");
+    let mut frame_by_stem: HashMap<String, String> = HashMap::new();
+    if let Ok(entries) = fs::read_dir(&frames_dir) {
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some((stem, _ext)) = name.rsplit_once('.') {
+                frame_by_stem.insert(
+                    stem.to_string(),
+                    entry.path().to_string_lossy().to_string(),
+                );
+            }
+        }
+    }
+
+    let mut copied = 0usize;
+    let mut committed_frames: Vec<String> = Vec::new();
+    let entries =
+        fs::read_dir(&preview_dir).map_err(|e| format!("Failed to read preview dir: {}", e))?;
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".txt") {
+            continue;
+        }
+        let stem = name.trim_end_matches(".txt");
+        let destination = labels_dir.join(&name);
+        fs::copy(entry.path(), &destination)
+            .map_err(|e| format!("Failed to copy {}: {}", name, e))?;
+        if let Some(frame_path) = frame_by_stem.get(stem) {
+            committed_frames.push(frame_path.clone());
+        }
+        copied += 1;
+    }
+
+    let mut files = read_processed_files(segment_path);
+    for frame_path in committed_frames {
+        if !files.contains(&frame_path) {
+            files.push(frame_path);
+        }
+    }
+    let payload = serde_json::json!({ "files": files });
+    fs::write(
+        segment_path.join("processed.json"),
+        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{\"files\":[]}".to_string()),
+    )
+    .map_err(|e| format!("Failed to write processed.json: {}", e))?;
+
+    Ok(copied)
+}
+
+#[tauri::command]
+fn discard_segment_preview(
+    segment_dir: String,
+    preview_subdir: Option<String>,
+) -> Result<(), String> {
+    let preview_subdir = preview_subdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_PREVIEW_SUBDIR);
+    let preview_dir = Path::new(&segment_dir).join(preview_subdir);
+    if preview_dir.is_dir() {
+        fs::remove_dir_all(&preview_dir)
+            .map_err(|e| format!("Failed to remove preview directory: {}", e))?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -1486,6 +1824,7 @@ pub fn run() {
         .manage(Mutex::new(JobRegistry {
             jobs: HashMap::new(),
         }))
+        .manage(Mutex::new(AnnotateServerState { server: None }))
         .manage(cli_args)
         .invoke_handler(tauri::generate_handler![
             prepare_dataset_load,
@@ -1501,6 +1840,7 @@ pub fn run() {
             load_dataset_batch,
             load_single_item,
             get_sorted_image_names,
+            get_last_frame_path,
             resave_labels,
             delete_dataset_item,
             get_item_paths,
@@ -1515,10 +1855,25 @@ pub fn run() {
             cancel_video_split,
             start_video_annotate,
             cancel_video_annotate,
+            commit_segment_preview,
+            discard_segment_preview,
             get_auto_annotate_statuses,
             get_segment_folders,
             frontend_log,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app_handle.try_state::<Mutex<AnnotateServerState>>() {
+                    if let Ok(mut guard) = state.lock() {
+                        if let Some(server) = guard.server.take() {
+                            if let Ok(mut child) = server.child.lock() {
+                                let _ = child.kill();
+                            }
+                        }
+                    }
+                }
+            }
+        });
 }
