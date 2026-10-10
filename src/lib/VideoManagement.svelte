@@ -86,12 +86,9 @@
   let annotateJobs = $state<Map<string, AnnotateJobState>>(new Map());
   let annotateStatuses = $state<Map<string, AnnotateDiskStatus>>(new Map());
   let annotateError = $state("");
-  let annotateClasses = $state("drone");
   let annotateClassId = $state(0);
-  let annotateEveryN = $state(15);
+  let annotateEveryN = $state(30);
   let annotateWriteAll = $state(true);
-  let annotateModel = $state("moondream2");
-  let annotateUseTracking = $state(false);
   let annotateScoreThreshold = $state(0);
   let annotateTrackDevice = $state("");
   let annotateSettingsOpen = $state(false);
@@ -232,52 +229,44 @@
     if (!videoId) return null;
     const job = annotateJobs.get(videoId);
     if (job?.status === "running") {
-      return { label: "annotating…", variant: "warn" };
+      return { label: "tracking…", variant: "warn" };
     }
     if (job?.status === "cancelled") {
       return { label: "cancelled", variant: "neutral" };
     }
     if (job?.status === "error") {
-      return { label: "annotate error", variant: "error" };
+      return { label: "track error", variant: "error" };
     }
     const disk = annotateStatuses.get(videoId);
     if (!disk) return null;
     if (disk.status === "completed") {
-      return { label: "annotated", variant: "ok" };
+      return { label: "tracked", variant: "ok" };
     }
     if (disk.status === "partial") {
       return {
-        label: `annotate ${disk.processedFrames}/${disk.totalFrames}`,
+        label: `tracked ${disk.processedFrames}/${disk.totalFrames}`,
         variant: "warn",
       };
     }
-    return { label: "not annotated", variant: "neutral" };
+    return { label: "not tracked", variant: "neutral" };
   }
 
-  async function invokeAnnotate(
-    video: VideoEntry,
-    options: {
-      preview?: boolean;
-      segment?: string;
-      framesDir?: string;
-      previewDir?: string;
-      initBboxes?: number[][];
-    } = {},
-  ) {
+  async function startManualTrack(video: VideoEntry, seg: string[], boxes: number[][]) {
     const videoId = getVideoId(video);
     if (!videoId) {
       annotateError = "Cannot determine a video id for this entry";
       return;
     }
     if (annotateJobs.get(videoId)?.status === "running") return;
+    if (boxes.length === 0) {
+      annotateError = "Mark at least one box on the last frame";
+      return;
+    }
 
-    const manualTrack = (options.initBboxes?.length ?? 0) > 0;
-    const classes = annotateClasses
-      .split(/[\s,]+/)
-      .map((name) => name.trim())
-      .filter(Boolean);
-    if (classes.length === 0) {
-      annotateError = "Enter at least one class name";
+    const framesDir = segmentFramesDir(video, seg);
+    const previewDir = segmentPreviewDir(video, seg);
+    if (!framesDir || !previewDir) {
+      annotateError = "Cannot resolve segment directories";
       return;
     }
 
@@ -288,26 +277,17 @@
       if (hasUnsaved) return;
     }
 
-    const preview = options.preview ?? false;
-    if (preview && options.segment && options.framesDir && options.previewDir) {
-      previewTarget = {
-        videoId,
-        segmentFolder: options.segment,
-        framesDir: options.framesDir,
-        previewDir: options.previewDir,
-      };
-    } else {
-      previewTarget = null;
-    }
+    previewTarget = {
+      videoId,
+      segmentFolder: segmentToFolderName(seg),
+      framesDir,
+      previewDir,
+    };
 
     setAnnotateJob(
       videoId,
       "running",
-      manualTrack
-        ? `Tracking ${options.initBboxes!.length} box(es) in ${options.segment ?? "segment"}...`
-        : preview
-          ? `Previewing ${options.segment ?? "segment"} for ${videoId}...`
-          : `Starting auto-annotation for ${videoId}...`,
+      `Tracking ${boxes.length} box(es) in ${segmentToFolderName(seg)}...`,
     );
     try {
       await invoke("start_video_annotate", {
@@ -315,44 +295,23 @@
         projectDir: dataDir || dataPath,
         videosDir: resolvedVideosDir || null,
         videoId,
-        classes,
+        classes: [],
         classId: annotateClassId,
         everyN: annotateEveryN,
         writeAll: annotateWriteAll,
-        moondreamModel: annotateModel,
         datasetKitDir: datasetKitDir || null,
-        useTracking: manualTrack ? true : annotateUseTracking,
         scoreThreshold: annotateScoreThreshold,
         trackDevice: annotateTrackDevice,
-        preview,
-        segment: options.segment ?? null,
-        labelsSubdir: preview ? PREVIEW_SUBDIR : "labels",
-        initBboxes: options.initBboxes ?? null,
+        preview: true,
+        segment: segmentToFolderName(seg),
+        labelsSubdir: PREVIEW_SUBDIR,
+        initBboxes: boxes,
       });
       if (!resolvedKitDir) void resolveKitDir();
     } catch (err) {
       previewTarget = null;
       setAnnotateJob(videoId, "error", `Error: ${String(err)}`);
     }
-  }
-
-  async function startAutoAnnotate(video: VideoEntry) {
-    await invokeAnnotate(video, {});
-  }
-
-  async function previewSegment(video: VideoEntry, seg: string[]) {
-    const framesDir = segmentFramesDir(video, seg);
-    const previewDir = segmentPreviewDir(video, seg);
-    if (!framesDir || !previewDir) {
-      annotateError = "Cannot resolve segment directories";
-      return;
-    }
-    await invokeAnnotate(video, {
-      preview: true,
-      segment: segmentToFolderName(seg),
-      framesDir,
-      previewDir,
-    });
   }
 
   async function openTrackDialog(video: VideoEntry, seg: string[]) {
@@ -387,13 +346,7 @@
     const dialog = trackDialog;
     trackDialog = null;
     if (!dialog || boxes.length === 0) return;
-    await invokeAnnotate(dialog.video, {
-      preview: true,
-      segment: segmentToFolderName(dialog.seg),
-      framesDir: dialog.framesDir,
-      previewDir: dialog.previewDir,
-      initBboxes: boxes,
-    });
+    await startManualTrack(dialog.video, dialog.seg, boxes);
   }
 
   function openPreviewTab(target: {
@@ -1312,17 +1265,10 @@
                 </button>
 
                 <button
-                  class="px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                  disabled={!selectedVideoId || anyAnnotateRunning}
-                  onclick={() => startAutoAnnotate(video)}
-                >
-                  Auto-annotate segments
-                </button>
-                <button
                   class="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600"
                   onclick={() => annotateSettingsOpen = !annotateSettingsOpen}
                 >
-                  {annotateSettingsOpen ? "Hide annotate settings" : "Annotate settings"}
+                  {annotateSettingsOpen ? "Hide track settings" : "Track settings"}
                 </button>
               </div>
               <div class="space-y-2">
@@ -1357,7 +1303,7 @@
 
             <div class="space-y-2 border-t border-zinc-700 pt-3">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="text-xs font-semibold text-zinc-300">Auto-annotation</span>
+                <span class="text-xs font-semibold text-zinc-300">Tracking</span>
                 {#if selectedAnnotateJob?.status === "running"}
                   <button
                     class="px-2 py-0.5 text-xs bg-zinc-700 hover:bg-zinc-600"
@@ -1381,20 +1327,11 @@
                   </span>
                 {/if}
                 {#if anyAnnotateRunning && selectedAnnotateJob?.status !== "running"}
-                  <span class="text-xs text-zinc-500">Another auto-annotation is running…</span>
+                  <span class="text-xs text-zinc-500">Another tracking run is running…</span>
                 {/if}
               </div>
               {#if annotateSettingsOpen}
                 <div class="flex flex-wrap items-center gap-2 text-xs">
-                  <label class="flex items-center gap-1">
-                    Classes
-                    <input
-                      type="text"
-                      class="w-40 px-2 py-1 border border-zinc-700 bg-zinc-800"
-                      bind:value={annotateClasses}
-                      placeholder="drone"
-                    />
-                  </label>
                   <label class="flex items-center gap-1">
                     Class ID
                     <input
@@ -1414,44 +1351,28 @@
                     />
                   </label>
                   <label class="flex items-center gap-1">
-                    Model
-                    <select
-                      class="px-2 py-1 border border-zinc-700 bg-zinc-800"
-                      bind:value={annotateModel}
-                    >
-                      <option value="moondream2">moondream2</option>
-                      <option value="moondream3-4bit">moondream3-4bit</option>
-                    </select>
-                  </label>
-                  <label class="flex items-center gap-1">
                     <input type="checkbox" bind:checked={annotateWriteAll} />
                     Write empty labels
                   </label>
                   <label class="flex items-center gap-1">
-                    <input type="checkbox" bind:checked={annotateUseTracking} />
-                    Use LightFC tracking
+                    Score threshold
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      class="w-20 px-2 py-1 border border-zinc-700 bg-zinc-800"
+                      bind:value={annotateScoreThreshold}
+                    />
                   </label>
-                  {#if annotateUseTracking}
-                    <label class="flex items-center gap-1">
-                      Score threshold
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        class="w-20 px-2 py-1 border border-zinc-700 bg-zinc-800"
-                        bind:value={annotateScoreThreshold}
-                      />
-                    </label>
-                    <label class="flex items-center gap-1">
-                      Track device
-                      <input
-                        type="text"
-                        class="w-24 px-2 py-1 border border-zinc-700 bg-zinc-800"
-                        bind:value={annotateTrackDevice}
-                        placeholder="auto"
-                      />
-                    </label>
-                  {/if}
+                  <label class="flex items-center gap-1">
+                    Track device
+                    <input
+                      type="text"
+                      class="w-24 px-2 py-1 border border-zinc-700 bg-zinc-800"
+                      bind:value={annotateTrackDevice}
+                      placeholder="auto"
+                    />
+                  </label>
                 </div>
               {/if}
               {#if annotateError}
@@ -1616,27 +1537,15 @@
                       <div class="flex flex-wrap items-center gap-1 px-1 py-0.5 text-[10px]">
                         <button
                           type="button"
-                          class="px-1.5 py-0.5 bg-purple-700 hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                          disabled={anyAnnotateRunning}
-                          title="Auto-annotate this segment and open the result for review before saving"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            void previewSegment(video, seg);
-                          }}
-                        >
-                          {previewReady ? "re-annotate" : "annotate"}
-                        </button>
-                        <button
-                          type="button"
                           class="px-1.5 py-0.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed"
                           disabled={anyAnnotateRunning}
-                          title="Mark a box on the last frame and have LightFC track it across the segment (no Moondream)"
+                          title="Mark a box on the last frame and have LightFC track it across the segment"
                           onclick={(e) => {
                             e.stopPropagation();
                             void openTrackDialog(video, seg);
                           }}
                         >
-                          track
+                          {previewReady ? "re-track" : "track"}
                         </button>
                         {#if previewReady}
                           <button

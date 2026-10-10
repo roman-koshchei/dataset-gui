@@ -1349,8 +1349,10 @@ fn ensure_annotate_server(
 
     #[cfg(windows)]
     {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        // DETACHED_PROCESS keeps the worker console-less without CREATE_NO_WINDOW,
+        // which deadlocks the scipy/transformers import inside the worker.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        command.creation_flags(DETACHED_PROCESS);
     }
 
     let mut child = command
@@ -1417,7 +1419,11 @@ fn start_video_annotate(
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
         .collect();
-    if classes.is_empty() {
+    let manual_init = init_bboxes
+        .as_ref()
+        .map(|boxes| !boxes.is_empty())
+        .unwrap_or(false);
+    if classes.is_empty() && !manual_init {
         return Err("At least one class name is required".to_string());
     }
 
@@ -1455,7 +1461,7 @@ fn start_video_annotate(
         "video_ids": [video_id.clone()],
         "classes": classes,
         "class_id": class_id.unwrap_or(0),
-        "every_n": every_n.unwrap_or(1).max(1),
+        "every_n": every_n.unwrap_or(30).max(1),
         "write_all": write_all.unwrap_or(false),
         "moondream_model": trimmed(&moondream_model).unwrap_or_else(|| "moondream2".to_string()),
         "use_tracking": use_tracking.unwrap_or(false),
